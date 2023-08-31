@@ -18,8 +18,6 @@ import org.elasticsearch.xpack.core.security.action.user.DeleteUserRequest;
 import org.elasticsearch.xpack.core.security.action.user.DeleteUserResponse;
 import org.elasticsearch.xpack.core.security.authc.esnative.ClientReservedRealm;
 import org.elasticsearch.xpack.core.security.user.AnonymousUser;
-import org.elasticsearch.xpack.core.security.user.SystemUser;
-import org.elasticsearch.xpack.core.security.user.XPackUser;
 import org.elasticsearch.xpack.security.authc.esnative.NativeUsersStore;
 
 public class TransportDeleteUserAction extends HandledTransportAction<DeleteUserRequest, DeleteUserResponse> {
@@ -28,8 +26,12 @@ public class TransportDeleteUserAction extends HandledTransportAction<DeleteUser
     private final NativeUsersStore usersStore;
 
     @Inject
-    public TransportDeleteUserAction(Settings settings, ActionFilters actionFilters,
-                                     NativeUsersStore usersStore, TransportService transportService) {
+    public TransportDeleteUserAction(
+        Settings settings,
+        ActionFilters actionFilters,
+        NativeUsersStore usersStore,
+        TransportService transportService
+    ) {
         super(DeleteUserAction.NAME, transportService, actionFilters, DeleteUserRequest::new);
         this.settings = settings;
         this.usersStore = usersStore;
@@ -41,26 +43,12 @@ public class TransportDeleteUserAction extends HandledTransportAction<DeleteUser
         if (ClientReservedRealm.isReserved(username, settings)) {
             if (AnonymousUser.isAnonymousUsername(username, settings)) {
                 listener.onFailure(new IllegalArgumentException("user [" + username + "] is anonymous and cannot be deleted"));
-                return;
             } else {
                 listener.onFailure(new IllegalArgumentException("user [" + username + "] is reserved and cannot be deleted"));
-                return;
             }
-        } else if (SystemUser.NAME.equals(username) || XPackUser.NAME.equals(username)) {
-            listener.onFailure(new IllegalArgumentException("user [" + username + "] is internal"));
             return;
         }
 
-        usersStore.deleteUser(request, new ActionListener<Boolean>() {
-            @Override
-            public void onResponse(Boolean found) {
-                listener.onResponse(new DeleteUserResponse(found));
-            }
-
-            @Override
-            public void onFailure(Exception e) {
-                listener.onFailure(e);
-            }
-        });
+        usersStore.deleteUser(request, listener.safeMap(DeleteUserResponse::new));
     }
 }

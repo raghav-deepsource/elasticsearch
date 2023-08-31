@@ -8,12 +8,11 @@
 
 package org.elasticsearch.search;
 
-import org.elasticsearch.action.OriginalIndices;
-import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.io.stream.Writeable;
 import org.elasticsearch.common.text.Text;
+import org.elasticsearch.core.Nullable;
 import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.transport.RemoteClusterAware;
 
@@ -24,12 +23,8 @@ import java.util.Objects;
  * The target that the search request was executed on.
  */
 public final class SearchShardTarget implements Writeable, Comparable<SearchShardTarget> {
-
     private final Text nodeId;
     private final ShardId shardId;
-    //original indices are only needed in the coordinating node throughout the search request execution.
-    //no need to serialize them as part of SearchShardTarget.
-    private final transient OriginalIndices originalIndices;
     private final String clusterAlias;
 
     public SearchShardTarget(StreamInput in) throws IOException {
@@ -39,14 +34,12 @@ public final class SearchShardTarget implements Writeable, Comparable<SearchShar
             nodeId = null;
         }
         shardId = new ShardId(in);
-        this.originalIndices = null;
         clusterAlias = in.readOptionalString();
     }
 
-    public SearchShardTarget(String nodeId, ShardId shardId, @Nullable String clusterAlias, OriginalIndices originalIndices) {
+    public SearchShardTarget(String nodeId, ShardId shardId, @Nullable String clusterAlias) {
         this.nodeId = nodeId == null ? null : new Text(nodeId);
         this.shardId = shardId;
-        this.originalIndices = originalIndices;
         this.clusterAlias = clusterAlias;
     }
 
@@ -65,10 +58,6 @@ public final class SearchShardTarget implements Writeable, Comparable<SearchShar
 
     public ShardId getShardId() {
         return shardId;
-    }
-
-    public OriginalIndices getOriginalIndices() {
-        return originalIndices;
     }
 
     @Nullable
@@ -113,9 +102,9 @@ public final class SearchShardTarget implements Writeable, Comparable<SearchShar
             return false;
         }
         SearchShardTarget that = (SearchShardTarget) o;
-        return Objects.equals(nodeId, that.nodeId) &&
-            Objects.equals(shardId, that.shardId) &&
-            Objects.equals(clusterAlias, that.clusterAlias);
+        return Objects.equals(nodeId, that.nodeId)
+            && Objects.equals(shardId, that.shardId)
+            && Objects.equals(clusterAlias, that.clusterAlias);
     }
 
     @Override
@@ -123,10 +112,18 @@ public final class SearchShardTarget implements Writeable, Comparable<SearchShar
         return Objects.hash(nodeId, shardId, clusterAlias);
     }
 
+    /**
+     * NOTE: this representation is used as the "id" for shards for the REST response
+     * when query profiling is requested. So changing this formulation may break
+     * systems that rely on the format, including the parser in SearchProfileResults.
+     */
     @Override
     public String toString() {
-        String shardToString = "[" + RemoteClusterAware.buildRemoteIndexName(
-            clusterAlias, shardId.getIndexName()) + "][" + shardId.getId() + "]";
+        String shardToString = "["
+            + RemoteClusterAware.buildRemoteIndexName(clusterAlias, shardId.getIndexName())
+            + "]["
+            + shardId.getId()
+            + "]";
         if (nodeId == null) {
             return "[_na_]" + shardToString;
         }

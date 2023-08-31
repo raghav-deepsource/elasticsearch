@@ -8,7 +8,7 @@
 Submits a SAML `Response` message to {es} for consumption.
 
 NOTE: This API is intended for use by custom web applications other than {kib}.
-If you are using {kib}, see the <<saml-guide>>.
+If you are using {kib}, see the <<saml-guide-stack>>.
 
 [[security-api-saml-authenticate-request]]
 ==== {api-request-title}
@@ -38,8 +38,9 @@ These APIs are used internally by {kib} in order to provide SAML based
 authentication, but can also be used by other, custom web applications or other
 clients. See also
 <<security-api-saml-prepare-authentication,SAML prepare authentication API>>,
-<<security-api-saml-invalidate,SAML invalidate API>> and
-<<security-api-saml-logout,SAML logout API>>.
+<<security-api-saml-invalidate,SAML invalidate API>>,
+<<security-api-saml-logout,SAML logout API>>, and
+<<security-api-saml-complete-logout, SAML complete logout API>>.
 
 
 [[security-api-saml-authenticate-request-body]]

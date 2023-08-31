@@ -6,12 +6,12 @@
  */
 package org.elasticsearch.xpack.core.security.action.oidc;
 
-import org.elasticsearch.Version;
+import org.elasticsearch.TransportVersion;
 import org.elasticsearch.action.ActionResponse;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
-import org.elasticsearch.common.xcontent.ToXContentObject;
-import org.elasticsearch.common.xcontent.XContentBuilder;
+import org.elasticsearch.xcontent.ToXContentObject;
+import org.elasticsearch.xcontent.XContentBuilder;
 
 import java.io.IOException;
 
@@ -47,7 +47,7 @@ public class OpenIdConnectPrepareAuthenticationResponse extends ActionResponse i
         authenticationRequestUrl = in.readString();
         state = in.readString();
         nonce = in.readString();
-        if (in.getVersion().onOrAfter(Version.V_7_11_0)) {
+        if (in.getTransportVersion().onOrAfter(TransportVersion.V_7_11_0)) {
             realmName = in.readString();
         }
     }
@@ -73,14 +73,21 @@ public class OpenIdConnectPrepareAuthenticationResponse extends ActionResponse i
         out.writeString(authenticationRequestUrl);
         out.writeString(state);
         out.writeString(nonce);
-        if (out.getVersion().onOrAfter(Version.V_7_11_0)) {
+        if (out.getTransportVersion().onOrAfter(TransportVersion.V_7_11_0)) {
             out.writeString(realmName);
         }
     }
 
     public String toString() {
-        return "{authenticationRequestUrl=" + authenticationRequestUrl + ", state=" + state + ", nonce="
-            + nonce + ", realmName" + realmName + "}";
+        return "{authenticationRequestUrl="
+            + authenticationRequestUrl
+            + ", state="
+            + state
+            + ", nonce="
+            + nonce
+            + ", realmName"
+            + realmName
+            + "}";
     }
 
     @Override
@@ -89,7 +96,7 @@ public class OpenIdConnectPrepareAuthenticationResponse extends ActionResponse i
         builder.field("redirect", authenticationRequestUrl);
         builder.field("state", state);
         builder.field("nonce", nonce);
-        if(realmName != null){
+        if (realmName != null) {
             builder.field("realm", realmName);
         }
         builder.endObject();

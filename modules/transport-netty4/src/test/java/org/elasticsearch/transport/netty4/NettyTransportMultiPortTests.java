@@ -7,7 +7,7 @@
  */
 package org.elasticsearch.transport.netty4;
 
-import org.elasticsearch.Version;
+import org.elasticsearch.TransportVersion;
 import org.elasticsearch.common.component.Lifecycle;
 import org.elasticsearch.common.io.stream.NamedWriteableRegistry;
 import org.elasticsearch.common.network.NetworkService;
@@ -19,7 +19,6 @@ import org.elasticsearch.indices.breaker.NoneCircuitBreakerService;
 import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.threadpool.TestThreadPool;
 import org.elasticsearch.threadpool.ThreadPool;
-import org.elasticsearch.transport.SharedGroupFactory;
 import org.elasticsearch.transport.TcpTransport;
 import org.elasticsearch.transport.TransportSettings;
 import org.junit.Before;
@@ -109,9 +108,16 @@ public class NettyTransportMultiPortTests extends ESTestCase {
 
     private TcpTransport startTransport(Settings settings, ThreadPool threadPool) {
         PageCacheRecycler recycler = new MockPageCacheRecycler(Settings.EMPTY);
-        TcpTransport transport = new Netty4Transport(settings, Version.CURRENT, threadPool, new NetworkService(Collections.emptyList()),
-            recycler, new NamedWriteableRegistry(Collections.emptyList()), new NoneCircuitBreakerService(),
-            new SharedGroupFactory(settings));
+        TcpTransport transport = new Netty4Transport(
+            settings,
+            TransportVersion.current(),
+            threadPool,
+            new NetworkService(Collections.emptyList()),
+            recycler,
+            new NamedWriteableRegistry(Collections.emptyList()),
+            new NoneCircuitBreakerService(),
+            new SharedGroupFactory(settings)
+        );
         transport.start();
 
         assertThat(transport.lifecycleState(), is(Lifecycle.State.STARTED));

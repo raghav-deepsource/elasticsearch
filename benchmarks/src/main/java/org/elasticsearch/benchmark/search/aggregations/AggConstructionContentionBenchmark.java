@@ -14,22 +14,24 @@ import org.apache.lucene.search.MatchAllDocsQuery;
 import org.apache.lucene.search.Query;
 import org.elasticsearch.common.breaker.CircuitBreaker;
 import org.elasticsearch.common.breaker.PreallocatedCircuitBreakerService;
-import org.elasticsearch.common.lease.Releasable;
-import org.elasticsearch.common.lease.Releasables;
 import org.elasticsearch.common.settings.ClusterSettings;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.util.BigArrays;
 import org.elasticsearch.common.util.PageCacheRecycler;
+import org.elasticsearch.core.Releasable;
+import org.elasticsearch.core.Releasables;
 import org.elasticsearch.index.Index;
 import org.elasticsearch.index.IndexSettings;
+import org.elasticsearch.index.analysis.NameOrDefinition;
 import org.elasticsearch.index.analysis.NamedAnalyzer;
 import org.elasticsearch.index.cache.bitset.BitsetFilterCache;
+import org.elasticsearch.index.fielddata.FieldDataContext;
 import org.elasticsearch.index.fielddata.IndexFieldData;
 import org.elasticsearch.index.fielddata.IndexFieldDataCache;
 import org.elasticsearch.index.mapper.MappedFieldType;
+import org.elasticsearch.index.mapper.NestedLookup;
 import org.elasticsearch.index.mapper.NumberFieldMapper;
 import org.elasticsearch.index.mapper.NumberFieldMapper.NumberType;
-import org.elasticsearch.index.mapper.ObjectMapper;
 import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.index.query.support.NestedScope;
 import org.elasticsearch.indices.breaker.CircuitBreakerService;
@@ -41,7 +43,6 @@ import org.elasticsearch.script.ScriptContext;
 import org.elasticsearch.search.SearchModule;
 import org.elasticsearch.search.aggregations.Aggregator;
 import org.elasticsearch.search.aggregations.AggregatorFactories;
-import org.elasticsearch.search.aggregations.MultiBucketConsumerService.MultiBucketConsumer;
 import org.elasticsearch.search.aggregations.bucket.terms.TermsAggregationBuilder;
 import org.elasticsearch.search.aggregations.metrics.SumAggregationBuilder;
 import org.elasticsearch.search.aggregations.support.AggregationContext;
@@ -69,6 +70,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
@@ -105,20 +107,12 @@ public class AggConstructionContentionBenchmark {
 
     @Setup
     public void setup() {
-        switch (breaker) {
-            case "real":
-                breakerService = new HierarchyCircuitBreakerService(Settings.EMPTY, List.of(), clusterSettings);
-                break;
-            case "preallocate":
-                preallocateBreaker = true;
-                breakerService = new HierarchyCircuitBreakerService(Settings.EMPTY, List.of(), clusterSettings);
-                break;
-            case "noop":
-                breakerService = new NoneCircuitBreakerService();
-                break;
-            default:
-                throw new UnsupportedOperationException();
-        }
+        breakerService = switch (breaker) {
+            case "real", "preallocate" -> new HierarchyCircuitBreakerService(Settings.EMPTY, List.of(), clusterSettings);
+            case "noop" -> new NoneCircuitBreakerService();
+            default -> throw new UnsupportedOperationException();
+        };
+        preallocateBreaker = breaker.equals("preallocate");
         bigArrays = new BigArrays(recycler, breakerService, "request");
     }
 
@@ -157,7 +151,6 @@ public class AggConstructionContentionBenchmark {
 
         private final CircuitBreaker breaker;
         private final PreallocatedCircuitBreakerService preallocated;
-        private final MultiBucketConsumer multiBucketConsumer;
 
         DummyAggregationContext(long bytesToPreallocate) {
             CircuitBreakerService breakerService;
@@ -173,7 +166,6 @@ public class AggConstructionContentionBenchmark {
                 preallocated = null;
             }
             breaker = breakerService.getBreaker(CircuitBreaker.REQUEST);
-            multiBucketConsumer = new MultiBucketConsumer(Integer.MAX_VALUE, breaker);
         }
 
         @Override
@@ -197,10 +189,26 @@ public class AggConstructionContentionBenchmark {
         }
 
         @Override
+        public Analyzer getNamedAnalyzer(String analyzer) {
+            return null;
+        }
+
+        @Override
+        public Analyzer buildCustomAnalyzer(
+            IndexSettings indexSettings,
+            boolean normalizer,
+            NameOrDefinition tokenizer,
+            List<NameOrDefinition> charFilters,
+            List<NameOrDefinition> tokenFilters
+        ) {
+            return null;
+        }
+
+        @Override
         protected IndexFieldData<?> buildFieldData(MappedFieldType ft) {
             IndexFieldDataCache indexFieldDataCache = indicesFieldDataCache.buildIndexFieldDataCache(new IndexFieldDataCache.Listener() {
             }, index, ft.name());
-            return ft.fielddataBuilder("test", this::lookup).build(indexFieldDataCache, breakerService);
+            return ft.fielddataBuilder(FieldDataContext.noRuntimeFields("benchmark")).build(indexFieldDataCache, breakerService);
         }
 
         @Override
@@ -208,6 +216,11 @@ public class AggConstructionContentionBenchmark {
             if (path.startsWith("int")) {
                 return new NumberFieldMapper.NumberFieldType(path, NumberType.INTEGER);
             }
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Set<String> getMatchingFieldNames(String pattern) {
             throw new UnsupportedOperationException();
         }
 
@@ -247,7 +260,17 @@ public class AggConstructionContentionBenchmark {
         }
 
         @Override
+        public Query filterQuery(Query query) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
         public IndexSettings getIndexSettings() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public ClusterSettings getClusterSettings() {
             throw new UnsupportedOperationException();
         }
 
@@ -257,7 +280,7 @@ public class AggConstructionContentionBenchmark {
         }
 
         @Override
-        public ObjectMapper getObjectMapper(String path) {
+        public NestedLookup nestedLookup() {
             throw new UnsupportedOperationException();
         }
 
@@ -277,8 +300,13 @@ public class AggConstructionContentionBenchmark {
         }
 
         @Override
-        public MultiBucketConsumer multiBucketConsumer() {
-            return multiBucketConsumer;
+        public void removeReleasable(Aggregator aggregator) {
+            releaseMe.remove(aggregator);
+        }
+
+        @Override
+        public int maxBuckets() {
+            return Integer.MAX_VALUE;
         }
 
         @Override
@@ -319,6 +347,21 @@ public class AggConstructionContentionBenchmark {
         @Override
         public boolean isCacheable() {
             throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public boolean enableRewriteToFilterByFilter() {
+            return true;
+        }
+
+        @Override
+        public boolean isInSortOrderExecutionRequired() {
+            return false;
+        }
+
+        @Override
+        public Set<String> sourcePath(String fullName) {
+            return Set.of(fullName);
         }
 
         @Override

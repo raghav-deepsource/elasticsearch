@@ -8,13 +8,14 @@
 
 package org.elasticsearch.search.profile.aggregation;
 
+import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.io.stream.Writeable;
-import org.elasticsearch.common.xcontent.ToXContentFragment;
-import org.elasticsearch.common.xcontent.XContentBuilder;
-import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.search.profile.ProfileResult;
+import org.elasticsearch.xcontent.ToXContentFragment;
+import org.elasticsearch.xcontent.XContentBuilder;
+import org.elasticsearch.xcontent.XContentParser;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -49,12 +50,8 @@ public final class AggregationProfileShardResult implements Writeable, ToXConten
 
     @Override
     public void writeTo(StreamOutput out) throws IOException {
-        out.writeVInt(aggProfileResults.size());
-        for (ProfileResult p : aggProfileResults) {
-            p.writeTo(out);
-        }
+        out.writeCollection(aggProfileResults);
     }
-
 
     public List<ProfileResult> getProfileResults() {
         return Collections.unmodifiableList(aggProfileResults);
@@ -70,11 +67,30 @@ public final class AggregationProfileShardResult implements Writeable, ToXConten
         return builder;
     }
 
+    @Override
+    public boolean equals(Object obj) {
+        if (obj == null || getClass() != obj.getClass()) {
+            return false;
+        }
+        AggregationProfileShardResult other = (AggregationProfileShardResult) obj;
+        return aggProfileResults.equals(other.aggProfileResults);
+    }
+
+    @Override
+    public int hashCode() {
+        return aggProfileResults.hashCode();
+    }
+
+    @Override
+    public String toString() {
+        return Strings.toString(this);
+    }
+
     public static AggregationProfileShardResult fromXContent(XContentParser parser) throws IOException {
         XContentParser.Token token = parser.currentToken();
         ensureExpectedToken(XContentParser.Token.START_ARRAY, token, parser);
         List<ProfileResult> aggProfileResults = new ArrayList<>();
-        while((token = parser.nextToken()) != XContentParser.Token.END_ARRAY) {
+        while ((token = parser.nextToken()) != XContentParser.Token.END_ARRAY) {
             aggProfileResults.add(ProfileResult.fromXContent(parser));
         }
         return new AggregationProfileShardResult(aggProfileResults);

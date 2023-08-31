@@ -19,7 +19,7 @@ import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.util.BigArrays;
 import org.elasticsearch.common.util.ByteArray;
-import org.elasticsearch.common.util.concurrent.RefCounted;
+import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.tasks.Task;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.TransportActionProxy;
@@ -30,31 +30,46 @@ import java.io.IOException;
 
 public class GetCcrRestoreFileChunkAction extends ActionType<GetCcrRestoreFileChunkAction.GetCcrRestoreFileChunkResponse> {
 
-    public static final GetCcrRestoreFileChunkAction INSTANCE = new GetCcrRestoreFileChunkAction();
-    public static final String NAME = "internal:admin/ccr/restore/file_chunk/get";
+    public static final GetCcrRestoreFileChunkAction INTERNAL_INSTANCE = new GetCcrRestoreFileChunkAction();
+    public static final String INTERNAL_NAME = "internal:admin/ccr/restore/file_chunk/get";
+    public static final String NAME = "indices:internal/admin/ccr/restore/file_chunk/get";
+    public static final GetCcrRestoreFileChunkAction INSTANCE = new GetCcrRestoreFileChunkAction(NAME);
 
     private GetCcrRestoreFileChunkAction() {
-        super(NAME, GetCcrRestoreFileChunkAction.GetCcrRestoreFileChunkResponse::new);
+        this(INTERNAL_NAME);
     }
 
-    public static class TransportGetCcrRestoreFileChunkAction
-        extends HandledTransportAction<GetCcrRestoreFileChunkRequest, GetCcrRestoreFileChunkAction.GetCcrRestoreFileChunkResponse> {
+    private GetCcrRestoreFileChunkAction(String name) {
+        super(name, GetCcrRestoreFileChunkAction.GetCcrRestoreFileChunkResponse::new);
+    }
 
-        private final CcrRestoreSourceService restoreSourceService;
+    abstract static class TransportGetCcrRestoreFileChunkAction extends HandledTransportAction<
+        GetCcrRestoreFileChunkRequest,
+        GetCcrRestoreFileChunkAction.GetCcrRestoreFileChunkResponse> {
+
+        protected final CcrRestoreSourceService restoreSourceService;
         private final BigArrays bigArrays;
 
-        @Inject
-        public TransportGetCcrRestoreFileChunkAction(BigArrays bigArrays, TransportService transportService, ActionFilters actionFilters,
-                                                     CcrRestoreSourceService restoreSourceService) {
-            super(NAME, transportService, actionFilters, GetCcrRestoreFileChunkRequest::new, ThreadPool.Names.GENERIC);
-            TransportActionProxy.registerProxyAction(transportService, NAME, false, GetCcrRestoreFileChunkResponse::new);
+        private TransportGetCcrRestoreFileChunkAction(
+            String actionName,
+            BigArrays bigArrays,
+            TransportService transportService,
+            ActionFilters actionFilters,
+            CcrRestoreSourceService restoreSourceService
+        ) {
+            super(actionName, transportService, actionFilters, GetCcrRestoreFileChunkRequest::new, ThreadPool.Names.GENERIC);
+            TransportActionProxy.registerProxyAction(transportService, actionName, false, GetCcrRestoreFileChunkResponse::new);
             this.restoreSourceService = restoreSourceService;
             this.bigArrays = bigArrays;
         }
 
         @Override
-        protected void doExecute(Task task, GetCcrRestoreFileChunkRequest request,
-                                 ActionListener<GetCcrRestoreFileChunkResponse> listener) {
+        protected void doExecute(
+            Task task,
+            GetCcrRestoreFileChunkRequest request,
+            ActionListener<GetCcrRestoreFileChunkResponse> listener
+        ) {
+            validate(request);
             int bytesRequested = request.getSize();
             ByteArray array = bigArrays.newByteArray(bytesRequested, false);
             String fileName = request.getFileName();
@@ -70,15 +85,51 @@ public class GetCcrRestoreFileChunkAction extends ActionType<GetCcrRestoreFileCh
                 listener.onFailure(e);
             }
         }
+
+        // We don't enforce any validation by default so that the internal action stays the same for BWC reasons
+        protected void validate(GetCcrRestoreFileChunkRequest request) {}
     }
 
-    public static class GetCcrRestoreFileChunkResponse extends ActionResponse implements RefCounted {
+    public static class InternalTransportAction extends TransportGetCcrRestoreFileChunkAction {
+        @Inject
+        public InternalTransportAction(
+            BigArrays bigArrays,
+            TransportService transportService,
+            ActionFilters actionFilters,
+            CcrRestoreSourceService restoreSourceService
+        ) {
+            super(INTERNAL_NAME, bigArrays, transportService, actionFilters, restoreSourceService);
+        }
+    }
+
+    public static class TransportAction extends TransportGetCcrRestoreFileChunkAction {
+        @Inject
+        public TransportAction(
+            BigArrays bigArrays,
+            TransportService transportService,
+            ActionFilters actionFilters,
+            CcrRestoreSourceService restoreSourceService
+        ) {
+            super(NAME, bigArrays, transportService, actionFilters, restoreSourceService);
+        }
+
+        @Override
+        protected void validate(GetCcrRestoreFileChunkRequest request) {
+            final ShardId shardId = request.getShardId();
+            assert shardId != null : "shardId must be specified for the request";
+            restoreSourceService.ensureSessionShardIdConsistency(request.getSessionUUID(), shardId);
+            restoreSourceService.ensureFileNameIsKnownToSession(request.getSessionUUID(), request.getFileName());
+        }
+    }
+
+    public static class GetCcrRestoreFileChunkResponse extends ActionResponse {
 
         private final long offset;
         private final ReleasableBytesReference chunk;
 
         GetCcrRestoreFileChunkResponse(StreamInput streamInput) throws IOException {
             super(streamInput);
+            assert ThreadPool.assertCurrentThreadPool(ThreadPool.Names.GENERIC); // large responses must fork before deserialization
             offset = streamInput.readVLong();
             chunk = streamInput.readReleasableBytesReference();
         }
@@ -115,6 +166,11 @@ public class GetCcrRestoreFileChunkAction extends ActionType<GetCcrRestoreFileCh
         @Override
         public boolean decRef() {
             return chunk.decRef();
+        }
+
+        @Override
+        public boolean hasReferences() {
+            return chunk.hasReferences();
         }
     }
 }

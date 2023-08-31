@@ -15,7 +15,7 @@ import org.elasticsearch.indices.IndicesService;
 import org.elasticsearch.test.ESIntegTestCase;
 import org.elasticsearch.test.InternalTestCluster;
 
-@ESIntegTestCase.ClusterScope(numDataNodes = 0, scope= ESIntegTestCase.Scope.TEST)
+@ESIntegTestCase.ClusterScope(numDataNodes = 0, scope = ESIntegTestCase.Scope.TEST)
 public class RestartInactiveAutoExpandReplicaNotStaleIT extends ESIntegTestCase {
 
     public void testNotStale() throws Exception {
@@ -28,7 +28,7 @@ public class RestartInactiveAutoExpandReplicaNotStaleIT extends ESIntegTestCase 
 
         ensureGreen();
 
-        ClusterStateResponse clusterStateResponse = client().admin().cluster().prepareState().get();
+        ClusterStateResponse clusterStateResponse = clusterAdmin().prepareState().get();
         IndexMetadata target = clusterStateResponse.getState().getMetadata().index("test");
 
         internalCluster().restartNode(replica, new InternalTestCluster.RestartCallback() {

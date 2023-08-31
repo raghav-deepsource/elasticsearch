@@ -22,24 +22,23 @@ public class FieldHighlightContext {
     public final FetchContext context;
     public final FetchSubPhase.HitContext hitContext;
     public final Query query;
-    public final boolean forceSource;
     public final Map<String, Object> cache;
 
-    public FieldHighlightContext(String fieldName,
-                                 SearchHighlightContext.Field field,
-                                 MappedFieldType fieldType,
-                                 FetchContext context,
-                                 FetchSubPhase.HitContext hitContext,
-                                 Query query,
-                                 boolean forceSource,
-                                 Map<String, Object> cache) {
+    public FieldHighlightContext(
+        String fieldName,
+        SearchHighlightContext.Field field,
+        MappedFieldType fieldType,
+        FetchContext context,
+        FetchSubPhase.HitContext hitContext,
+        Query query,
+        Map<String, Object> cache
+    ) {
         this.fieldName = fieldName;
         this.field = field;
         this.fieldType = fieldType;
         this.context = context;
         this.hitContext = hitContext;
         this.query = query;
-        this.forceSource = forceSource;
         this.cache = cache;
     }
 }

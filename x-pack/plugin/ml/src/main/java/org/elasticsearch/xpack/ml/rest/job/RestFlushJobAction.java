@@ -6,21 +6,25 @@
  */
 package org.elasticsearch.xpack.ml.rest.job;
 
-import org.elasticsearch.client.node.NodeClient;
-import org.elasticsearch.common.xcontent.XContentParser;
+import org.elasticsearch.client.internal.node.NodeClient;
+import org.elasticsearch.core.RestApiVersion;
 import org.elasticsearch.rest.BaseRestHandler;
 import org.elasticsearch.rest.RestRequest;
+import org.elasticsearch.rest.Scope;
+import org.elasticsearch.rest.ServerlessScope;
 import org.elasticsearch.rest.action.RestToXContentListener;
+import org.elasticsearch.xcontent.XContentParser;
 import org.elasticsearch.xpack.core.ml.action.FlushJobAction;
 import org.elasticsearch.xpack.core.ml.job.config.Job;
-import org.elasticsearch.xpack.ml.MachineLearning;
 
 import java.io.IOException;
-import java.util.Collections;
 import java.util.List;
 
 import static org.elasticsearch.rest.RestRequest.Method.POST;
+import static org.elasticsearch.xpack.ml.MachineLearning.BASE_PATH;
+import static org.elasticsearch.xpack.ml.MachineLearning.PRE_V7_BASE_PATH;
 
+@ServerlessScope(Scope.PUBLIC)
 public class RestFlushJobAction extends BaseRestHandler {
 
     private static final boolean DEFAULT_CALC_INTERIM = false;
@@ -31,8 +35,10 @@ public class RestFlushJobAction extends BaseRestHandler {
 
     @Override
     public List<Route> routes() {
-        return Collections.singletonList(
-            new Route(POST, MachineLearning.BASE_PATH + "anomaly_detectors/{" + Job.ID.getPreferredName() + "}/_flush")
+        return List.of(
+            Route.builder(POST, BASE_PATH + "anomaly_detectors/{" + Job.ID + "}/_flush")
+                .replaces(POST, PRE_V7_BASE_PATH + "anomaly_detectors/{" + Job.ID + "}/_flush", RestApiVersion.V_7)
+                .build()
         );
     }
 
@@ -50,8 +56,9 @@ public class RestFlushJobAction extends BaseRestHandler {
             request = FlushJobAction.Request.parseRequest(jobId, parser);
         } else {
             request = new FlushJobAction.Request(restRequest.param(Job.ID.getPreferredName()));
-            request.setCalcInterim(restRequest.paramAsBoolean(FlushJobAction.Request.CALC_INTERIM.getPreferredName(),
-                    DEFAULT_CALC_INTERIM));
+            request.setCalcInterim(
+                restRequest.paramAsBoolean(FlushJobAction.Request.CALC_INTERIM.getPreferredName(), DEFAULT_CALC_INTERIM)
+            );
             request.setStart(restRequest.param(FlushJobAction.Request.START.getPreferredName(), DEFAULT_START));
             request.setEnd(restRequest.param(FlushJobAction.Request.END.getPreferredName(), DEFAULT_END));
             request.setAdvanceTime(restRequest.param(FlushJobAction.Request.ADVANCE_TIME.getPreferredName(), DEFAULT_ADVANCE_TIME));

@@ -11,13 +11,15 @@ import org.apache.logging.log4j.Logger;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.io.stream.Writeable;
-import org.elasticsearch.common.xcontent.NamedXContentRegistry;
-import org.elasticsearch.common.xcontent.ToXContentObject;
-import org.elasticsearch.common.xcontent.XContentBuilder;
-import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.index.query.MatchAllQueryBuilder;
 import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.index.query.QueryBuilders;
+import org.elasticsearch.index.query.QueryRewriteContext;
+import org.elasticsearch.index.query.Rewriteable;
+import org.elasticsearch.xcontent.NamedXContentRegistry;
+import org.elasticsearch.xcontent.ToXContentObject;
+import org.elasticsearch.xcontent.XContentBuilder;
+import org.elasticsearch.xcontent.XContentParser;
 
 import java.io.IOException;
 import java.util.Collections;
@@ -25,7 +27,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 
-public class QueryProvider implements Writeable, ToXContentObject {
+public class QueryProvider implements Writeable, ToXContentObject, Rewriteable<QueryProvider> {
 
     private static final Logger logger = LogManager.getLogger(QueryProvider.class);
 
@@ -37,7 +39,8 @@ public class QueryProvider implements Writeable, ToXContentObject {
         return new QueryProvider(
             Collections.singletonMap(MatchAllQueryBuilder.NAME, Collections.emptyMap()),
             QueryBuilders.matchAllQuery(),
-            null);
+            null
+        );
     }
 
     public static QueryProvider fromXContent(XContentParser parser, boolean lenient, String failureMessage) throws IOException {
@@ -46,9 +49,9 @@ public class QueryProvider implements Writeable, ToXContentObject {
         Exception exception = null;
         try {
             parsedQuery = XContentObjectTransformer.queryBuilderTransformer(parser.getXContentRegistry()).fromMap(query);
-        } catch(Exception ex) {
+        } catch (Exception ex) {
             if (ex.getCause() instanceof IllegalArgumentException) {
-                ex = (Exception)ex.getCause();
+                ex = (Exception) ex.getCause();
             }
             exception = ex;
             if (lenient) {
@@ -61,12 +64,13 @@ public class QueryProvider implements Writeable, ToXContentObject {
     }
 
     public static QueryProvider fromParsedQuery(QueryBuilder parsedQuery) throws IOException {
-        return parsedQuery == null ?
-            null :
-            new QueryProvider(
+        return parsedQuery == null
+            ? null
+            : new QueryProvider(
                 XContentObjectTransformer.queryBuilderTransformer(NamedXContentRegistry.EMPTY).toMap(parsedQuery),
                 parsedQuery,
-                null);
+                null
+            );
     }
 
     public static QueryProvider fromStream(StreamInput in) throws IOException {
@@ -85,7 +89,7 @@ public class QueryProvider implements Writeable, ToXContentObject {
 
     @Override
     public void writeTo(StreamOutput out) throws IOException {
-        out.writeMap(query);
+        out.writeGenericMap(query);
         out.writeOptionalNamedWriteable(parsedQuery);
         out.writeException(parsingException);
     }
@@ -129,5 +133,17 @@ public class QueryProvider implements Writeable, ToXContentObject {
         builder.map(query);
         return builder;
     }
-}
 
+    @Override
+    public QueryProvider rewrite(QueryRewriteContext ctx) throws IOException {
+        assert parsedQuery != null;
+        if (parsedQuery == null) {
+            return this;
+        }
+        QueryBuilder rewritten = Rewriteable.rewrite(parsedQuery, ctx);
+        if (rewritten == parsedQuery) {
+            return this;
+        }
+        return new QueryProvider(query, rewritten, parsingException);
+    }
+}

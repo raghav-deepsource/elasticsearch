@@ -15,15 +15,17 @@ import org.elasticsearch.index.mapper.NumberFieldMapper;
 import org.elasticsearch.script.FieldScript;
 import org.elasticsearch.script.ScriptException;
 import org.elasticsearch.search.lookup.SearchLookup;
+import org.elasticsearch.search.lookup.Source;
 import org.elasticsearch.test.ESTestCase;
+import org.elasticsearch.xcontent.XContentType;
 
 import java.io.IOException;
 import java.text.ParseException;
 import java.util.Collections;
 
 import static org.hamcrest.Matchers.equalTo;
-import static org.mockito.Matchers.anyInt;
-import static org.mockito.Matchers.anyObject;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -46,10 +48,14 @@ public class ExpressionFieldScriptTests extends ESTestCase {
 
         IndexNumericFieldData fieldData = mock(IndexNumericFieldData.class);
         when(fieldData.getFieldName()).thenReturn("field");
-        when(fieldData.load(anyObject())).thenReturn(atomicFieldData);
+        when(fieldData.load(any())).thenReturn(atomicFieldData);
 
         service = new ExpressionScriptEngine();
-        lookup = new SearchLookup(field -> field.equals("field") ? fieldType : null, (ignored, lookup) -> fieldData);
+        lookup = new SearchLookup(
+            field -> field.equals("field") ? fieldType : null,
+            (ignored, _lookup, fdt) -> fieldData,
+            (ctx, doc) -> Source.empty(XContentType.JSON)
+        );
     }
 
     private FieldScript.LeafFactory compile(String expression) {
@@ -58,16 +64,12 @@ public class ExpressionFieldScriptTests extends ESTestCase {
     }
 
     public void testCompileError() {
-        ScriptException e = expectThrows(ScriptException.class, () -> {
-            compile("doc['field'].value * *@#)(@$*@#$ + 4");
-        });
+        ScriptException e = expectThrows(ScriptException.class, () -> { compile("doc['field'].value * *@#)(@$*@#$ + 4"); });
         assertTrue(e.getCause() instanceof ParseException);
     }
 
     public void testLinkError() {
-        ScriptException e = expectThrows(ScriptException.class, () -> {
-            compile("doc['nonexistent'].value * 5");
-        });
+        ScriptException e = expectThrows(ScriptException.class, () -> { compile("doc['nonexistent'].value * 5"); });
         assertTrue(e.getCause() instanceof ParseException);
     }
 

@@ -12,11 +12,12 @@ import org.elasticsearch.action.support.ActionFilters;
 import org.elasticsearch.action.support.DefaultShardOperationFailedException;
 import org.elasticsearch.action.support.replication.ReplicationResponse;
 import org.elasticsearch.action.support.replication.TransportBroadcastReplicationAction;
-import org.elasticsearch.client.node.NodeClient;
+import org.elasticsearch.client.internal.node.NodeClient;
 import org.elasticsearch.cluster.metadata.IndexNameExpressionResolver;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.index.shard.ShardId;
+import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.TransportService;
 
 import java.util.List;
@@ -24,19 +25,31 @@ import java.util.List;
 /**
  * Flush Action.
  */
-public class TransportFlushAction
-        extends TransportBroadcastReplicationAction<FlushRequest, FlushResponse, ShardFlushRequest, ReplicationResponse> {
+public class TransportFlushAction extends TransportBroadcastReplicationAction<
+    FlushRequest,
+    FlushResponse,
+    ShardFlushRequest,
+    ReplicationResponse> {
 
     @Inject
-    public TransportFlushAction(ClusterService clusterService, TransportService transportService, NodeClient client,
-                                ActionFilters actionFilters, IndexNameExpressionResolver indexNameExpressionResolver) {
-        super(FlushAction.NAME, FlushRequest::new, clusterService, transportService, client, actionFilters, indexNameExpressionResolver,
-            TransportShardFlushAction.TYPE);
-    }
-
-    @Override
-    protected ReplicationResponse newShardResponse() {
-        return new ReplicationResponse();
+    public TransportFlushAction(
+        ClusterService clusterService,
+        TransportService transportService,
+        NodeClient client,
+        ActionFilters actionFilters,
+        IndexNameExpressionResolver indexNameExpressionResolver
+    ) {
+        super(
+            FlushAction.NAME,
+            FlushRequest::new,
+            clusterService,
+            transportService,
+            client,
+            actionFilters,
+            indexNameExpressionResolver,
+            TransportShardFlushAction.TYPE,
+            ThreadPool.Names.FLUSH
+        );
     }
 
     @Override
@@ -45,8 +58,12 @@ public class TransportFlushAction
     }
 
     @Override
-    protected FlushResponse newResponse(int successfulShards, int failedShards, int totalNumCopies, List
-            <DefaultShardOperationFailedException> shardFailures) {
+    protected FlushResponse newResponse(
+        int successfulShards,
+        int failedShards,
+        int totalNumCopies,
+        List<DefaultShardOperationFailedException> shardFailures
+    ) {
         return new FlushResponse(totalNumCopies, successfulShards, failedShards, shardFailures);
     }
 }

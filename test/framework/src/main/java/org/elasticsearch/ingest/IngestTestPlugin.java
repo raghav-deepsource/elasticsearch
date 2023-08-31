@@ -8,11 +8,10 @@
 
 package org.elasticsearch.ingest;
 
-import java.util.Collections;
-import java.util.Map;
-
 import org.elasticsearch.plugins.IngestPlugin;
 import org.elasticsearch.plugins.Plugin;
+
+import java.util.Map;
 
 /**
  * Adds an ingest processor to be used in tests.
@@ -20,16 +19,15 @@ import org.elasticsearch.plugins.Plugin;
 public class IngestTestPlugin extends Plugin implements IngestPlugin {
     @Override
     public Map<String, Processor.Factory> getProcessors(Processor.Parameters parameters) {
-        return Collections.singletonMap("test", (factories, tag, description, config) ->
-            new TestProcessor("id", "test", "description", doc -> {
-                doc.setFieldValue("processed", true);
-                if (doc.hasField("fail") && doc.getFieldValue("fail", Boolean.class)) {
-                    throw new IllegalArgumentException("test processor failed");
-                }
-                if (doc.hasField("drop") && doc.getFieldValue("drop", Boolean.class)) {
-                    return null;
-                }
-                return doc;
-            }));
+        return Map.of("test", (factories, tag, description, config) -> new TestProcessor("id", "test", "description", doc -> {
+            doc.setFieldValue("processed", true);
+            if (doc.hasField("fail") && doc.getFieldValue("fail", Boolean.class)) {
+                throw new IllegalArgumentException("test processor failed");
+            }
+            if (doc.hasField("drop") && doc.getFieldValue("drop", Boolean.class)) {
+                return null;
+            }
+            return doc;
+        }));
     }
 }

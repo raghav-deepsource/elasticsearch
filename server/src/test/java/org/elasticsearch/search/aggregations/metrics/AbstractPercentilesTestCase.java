@@ -9,13 +9,14 @@
 package org.elasticsearch.search.aggregations.metrics;
 
 import org.elasticsearch.common.Strings;
-import org.elasticsearch.common.xcontent.ToXContent;
-import org.elasticsearch.common.xcontent.XContentBuilder;
-import org.elasticsearch.common.xcontent.json.JsonXContent;
 import org.elasticsearch.search.DocValueFormat;
 import org.elasticsearch.search.aggregations.Aggregation.CommonFields;
+import org.elasticsearch.search.aggregations.AggregationBuilder;
 import org.elasticsearch.search.aggregations.InternalAggregation;
 import org.elasticsearch.test.InternalAggregationTestCase;
+import org.elasticsearch.xcontent.ToXContent;
+import org.elasticsearch.xcontent.XContentBuilder;
+import org.elasticsearch.xcontent.json.JsonXContent;
 
 import java.io.IOException;
 import java.util.Arrays;
@@ -23,25 +24,31 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.function.Predicate;
 import java.util.stream.Stream;
 
+import static java.util.Collections.emptyMap;
 import static java.util.stream.Collectors.toList;
 import static org.hamcrest.Matchers.equalTo;
+import static org.mockito.Mockito.mock;
 
-public abstract class AbstractPercentilesTestCase<T extends InternalAggregation & Iterable<Percentile>>
-        extends InternalAggregationTestCase<T> {
+public abstract class AbstractPercentilesTestCase<T extends InternalAggregation & Iterable<Percentile>> extends InternalAggregationTestCase<
+    T> {
     @Override
     protected T createTestInstance(String name, Map<String, Object> metadata) {
         return createTestInstance(name, metadata, randomBoolean(), randomNumericDocValueFormat(), randomPercents(false));
     }
 
     @Override
-    protected List<T> randomResultsToReduce(String name, int size) {
+    protected BuilderAndToReduce<T> randomResultsToReduce(String name, int size) {
         boolean keyed = randomBoolean();
         DocValueFormat format = randomNumericDocValueFormat();
         double[] percents = randomPercents(false);
-        return Stream.generate(() -> createTestInstance(name, null, keyed, format, percents)).limit(size).collect(toList());
+        return new BuilderAndToReduce<T>(
+            mock(AggregationBuilder.class),
+            Stream.generate(() -> createTestInstance(name, null, keyed, format, percents)).limit(size).collect(toList())
+        );
     }
 
     private T createTestInstance(String name, Map<String, Object> metadata, boolean keyed, DocValueFormat format, double[] percents) {
@@ -50,11 +57,18 @@ public abstract class AbstractPercentilesTestCase<T extends InternalAggregation 
         for (int i = 0; i < numValues; ++i) {
             values[i] = randomDouble();
         }
-        return createTestInstance(name, metadata, keyed, format, percents, values);
+        return createTestInstance(name, metadata, keyed, format, percents, values, false);
     }
 
-    protected abstract T createTestInstance(String name, Map<String, Object> metadata,
-                                            boolean keyed, DocValueFormat format, double[] percents, double[] values);
+    protected abstract T createTestInstance(
+        String name,
+        Map<String, Object> metadata,
+        boolean keyed,
+        DocValueFormat format,
+        double[] percents,
+        double[] values,
+        boolean empty
+    );
 
     protected abstract Class<? extends ParsedPercentiles> implementationClass();
 
@@ -89,11 +103,11 @@ public abstract class AbstractPercentilesTestCase<T extends InternalAggregation 
     protected abstract void assertPercentile(T agg, Double value);
 
     public void testEmptyRanksXContent() throws IOException {
-        double[] percents = new double[]{1,2,3};
+        double[] percents = new double[] { 1, 2, 3 };
         boolean keyed = randomBoolean();
         DocValueFormat docValueFormat = randomNumericDocValueFormat();
 
-        T agg = createTestInstance("test", Collections.emptyMap(), keyed, docValueFormat, percents, new double[0]);
+        T agg = createTestInstance("test", Collections.emptyMap(), keyed, docValueFormat, percents, new double[0], false);
 
         for (Percentile percentile : agg) {
             Double value = percentile.getValue();
@@ -106,32 +120,56 @@ public abstract class AbstractPercentilesTestCase<T extends InternalAggregation 
         builder.endObject();
         String expected;
         if (keyed) {
-            expected = "{\n" +
-                "  \"values\" : {\n" +
-                "    \"1.0\" : null,\n" +
-                "    \"2.0\" : null,\n" +
-                "    \"3.0\" : null\n" +
-                "  }\n" +
-                "}";
+            expected = """
+                {
+                  "values" : {
+                    "1.0" : null,
+                    "2.0" : null,
+                    "3.0" : null
+                  }
+                }""";
         } else {
-            expected = "{\n" +
-                "  \"values\" : [\n" +
-                "    {\n" +
-                "      \"key\" : 1.0,\n" +
-                "      \"value\" : null\n" +
-                "    },\n" +
-                "    {\n" +
-                "      \"key\" : 2.0,\n" +
-                "      \"value\" : null\n" +
-                "    },\n" +
-                "    {\n" +
-                "      \"key\" : 3.0,\n" +
-                "      \"value\" : null\n" +
-                "    }\n" +
-                "  ]\n" +
-                "}";
+            expected = """
+                {
+                  "values" : [
+                    {
+                      "key" : 1.0,
+                      "value" : null
+                    },
+                    {
+                      "key" : 2.0,
+                      "value" : null
+                    },
+                    {
+                      "key" : 3.0,
+                      "value" : null
+                    }
+                  ]
+                }""";
         }
 
         assertThat(Strings.toString(builder), equalTo(expected));
+    }
+
+    public void testEmptyIterator() {
+        final double[] percents = randomPercents(false);
+
+        final Iterable<?> aggregation = createTestInstance(
+            "test",
+            emptyMap(),
+            false,
+            randomNumericDocValueFormat(),
+            percents,
+            new double[] {},
+            true
+        );
+
+        for (var ignored : aggregation) {
+            fail("empty expected");
+        }
+
+        final Iterator<?> it = aggregation.iterator();
+        assertFalse(it.hasNext());
+        expectThrows(NoSuchElementException.class, it::next);
     }
 }

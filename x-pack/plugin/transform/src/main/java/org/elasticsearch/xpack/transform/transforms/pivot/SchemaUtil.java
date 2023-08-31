@@ -9,13 +9,12 @@ package org.elasticsearch.xpack.transform.transforms.pivot;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.apache.logging.log4j.message.ParameterizedMessage;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.fieldcaps.FieldCapabilitiesAction;
 import org.elasticsearch.action.fieldcaps.FieldCapabilitiesRequest;
 import org.elasticsearch.action.support.IndicesOptions;
-import org.elasticsearch.client.Client;
-import org.elasticsearch.common.collect.Tuple;
+import org.elasticsearch.client.internal.Client;
+import org.elasticsearch.core.Tuple;
 import org.elasticsearch.index.mapper.KeywordFieldMapper;
 import org.elasticsearch.index.mapper.NumberFieldMapper;
 import org.elasticsearch.search.aggregations.AggregationBuilder;
@@ -31,6 +30,7 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static org.elasticsearch.core.Strings.format;
 import static org.elasticsearch.xpack.transform.transforms.common.DocumentConversionUtils.extractFieldMappings;
 
 public final class SchemaUtil {
@@ -94,6 +94,7 @@ public final class SchemaUtil {
      */
     public static void deduceMappings(
         final Client client,
+        final Map<String, String> headers,
         final PivotConfig config,
         final String[] sourceIndex,
         final Map<String, Object> runtimeMappings,
@@ -108,23 +109,19 @@ public final class SchemaUtil {
         // collects the target mapping types used for grouping
         Map<String, String> fieldTypesForGrouping = new HashMap<>();
 
-        config.getGroupConfig()
-            .getGroups()
-            .forEach(
-                (destinationFieldName, group) -> {
-                    // skip any fields that use scripts as there will be no source mapping
-                    if (group.getScriptConfig() != null) {
-                        return;
-                    }
+        config.getGroupConfig().getGroups().forEach((destinationFieldName, group) -> {
+            // skip any fields that use scripts as there will be no source mapping
+            if (group.getScriptConfig() != null) {
+                return;
+            }
 
-                    // We will always need the field name for the grouping to create the mapping
-                    fieldNamesForGrouping.put(destinationFieldName, group.getField());
-                    // Sometimes the group config will supply a desired mapping as well
-                    if (group.getMappingType() != null) {
-                        fieldTypesForGrouping.put(destinationFieldName, group.getMappingType());
-                    }
-                }
-            );
+            // We will always need the field name for the grouping to create the mapping
+            fieldNamesForGrouping.put(destinationFieldName, group.getField());
+            // Sometimes the group config will supply a desired mapping as well
+            if (group.getMappingType() != null) {
+                fieldTypesForGrouping.put(destinationFieldName, group.getMappingType());
+            }
+        });
 
         for (AggregationBuilder agg : config.getAggregationConfig().getAggregatorFactories()) {
             Tuple<Map<String, String>, Map<String, String>> inputAndOutputTypes = TransformAggregations.getAggregationInputAndOutputTypes(
@@ -146,6 +143,7 @@ public final class SchemaUtil {
 
         getSourceFieldMappings(
             client,
+            headers,
             sourceIndex,
             allFieldNames.values().stream().filter(Objects::nonNull).toArray(String[]::new),
             runtimeMappings,
@@ -156,7 +154,8 @@ public final class SchemaUtil {
                         aggregationTypes,
                         fieldNamesForGrouping,
                         fieldTypesForGrouping,
-                        sourceMappings)
+                        sourceMappings
+                    )
                 ),
                 listener::onFailure
             )
@@ -203,21 +202,12 @@ public final class SchemaUtil {
             String destinationMapping = TransformAggregations.resolveTargetMapping(aggregationName, sourceMapping);
 
             logger.debug(
-                () -> new ParameterizedMessage(
-                    "Deduced mapping for: [{}], agg type [{}] to [{}]",
-                    targetFieldName,
-                    aggregationName,
-                    destinationMapping
-                )
+                () -> format("Deduced mapping for: [%s], agg type [%s] to [%s]", targetFieldName, aggregationName, destinationMapping)
             );
 
             if (TransformAggregations.isDynamicMapping(destinationMapping)) {
                 logger.debug(
-                    () -> new ParameterizedMessage(
-                        "Dynamic target mapping set for field [{}] and aggregation [{}]",
-                        targetFieldName,
-                        aggregationName
-                    )
+                    () -> format("Dynamic target mapping set for field [%s] and aggregation [%s]", targetFieldName, aggregationName)
                 );
             } else if (destinationMapping != null) {
                 targetMapping.put(targetFieldName, destinationMapping);
@@ -232,7 +222,7 @@ public final class SchemaUtil {
 
         fieldNamesForGrouping.forEach((targetFieldName, sourceFieldName) -> {
             String destinationMapping = fieldTypesForGrouping.computeIfAbsent(targetFieldName, (s) -> sourceMappings.get(sourceFieldName));
-            logger.debug(() -> new ParameterizedMessage("Deduced mapping for: [{}] to [{}]", targetFieldName, destinationMapping));
+            logger.debug(() -> format("Deduced mapping for: [%s] to [%s]", targetFieldName, destinationMapping));
             if (destinationMapping != null) {
                 targetMapping.put(targetFieldName, destinationMapping);
             } else {
@@ -254,27 +244,29 @@ public final class SchemaUtil {
     /*
      * Very "magic" helper method to extract the source mappings
      */
-    static void getSourceFieldMappings(Client client,
-                                       String[] index,
-                                       String[] fields,
-                                       Map<String, Object> runtimeMappings,
-                                       ActionListener<Map<String, String>> listener) {
+    static void getSourceFieldMappings(
+        Client client,
+        Map<String, String> headers,
+        String[] index,
+        String[] fields,
+        Map<String, Object> runtimeMappings,
+        ActionListener<Map<String, String>> listener
+    ) {
         if (index == null || index.length == 0 || fields == null || fields.length == 0) {
             listener.onResponse(Collections.emptyMap());
             return;
         }
-        FieldCapabilitiesRequest fieldCapabilitiesRequest =
-            new FieldCapabilitiesRequest()
-                .indices(index)
-                .fields(fields)
-                .runtimeFields(runtimeMappings)
-                .indicesOptions(IndicesOptions.LENIENT_EXPAND_OPEN);
-        client.execute(
+        FieldCapabilitiesRequest fieldCapabilitiesRequest = new FieldCapabilitiesRequest().indices(index)
+            .fields(fields)
+            .runtimeFields(runtimeMappings)
+            .indicesOptions(IndicesOptions.LENIENT_EXPAND_OPEN);
+        ClientHelper.executeWithHeadersAsync(
+            headers,
+            ClientHelper.TRANSFORM_ORIGIN,
+            client,
             FieldCapabilitiesAction.INSTANCE,
             fieldCapabilitiesRequest,
-            ActionListener.wrap(
-                response -> listener.onResponse(extractFieldMappings(response)),
-                listener::onFailure)
+            ActionListener.wrap(response -> listener.onResponse(extractFieldMappings(response)), listener::onFailure)
         );
     }
 

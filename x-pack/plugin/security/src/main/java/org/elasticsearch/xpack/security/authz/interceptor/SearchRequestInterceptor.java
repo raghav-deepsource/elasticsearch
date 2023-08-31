@@ -10,45 +10,45 @@ import org.elasticsearch.ElasticsearchSecurityException;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.IndicesRequest;
 import org.elasticsearch.action.search.SearchRequest;
+import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.license.XPackLicenseState;
 import org.elasticsearch.rest.RestStatus;
-import org.elasticsearch.search.builder.SearchSourceBuilder;
-import org.elasticsearch.search.internal.ShardSearchRequest;
 import org.elasticsearch.threadpool.ThreadPool;
+import org.elasticsearch.xpack.core.security.authz.accesscontrol.IndicesAccessControl;
 
-/**
- * If field level security is enabled this interceptor disables the request cache for search and shardSearch requests.
- */
+import java.util.Map;
+
 public class SearchRequestInterceptor extends FieldAndDocumentLevelSecurityRequestInterceptor {
 
-    public SearchRequestInterceptor(ThreadPool threadPool, XPackLicenseState licenseState) {
+    private final ClusterService clusterService;
+
+    public SearchRequestInterceptor(ThreadPool threadPool, XPackLicenseState licenseState, ClusterService clusterService) {
         super(threadPool.getThreadContext(), licenseState);
+        this.clusterService = clusterService;
     }
 
     @Override
-    public void disableFeatures(IndicesRequest indicesRequest, boolean fieldLevelSecurityEnabled, boolean documentLevelSecurityEnabled,
-                                ActionListener<Void> listener) {
-        assert indicesRequest instanceof SearchRequest || indicesRequest instanceof ShardSearchRequest
-            : "request must be either SearchRequest or ShardSearchRequest";
-
-        final SearchSourceBuilder source;
-        if (indicesRequest instanceof SearchRequest) {
-            final SearchRequest request = (SearchRequest) indicesRequest;
-            request.requestCache(false);
-            source = request.source();
-        } else {
-            final ShardSearchRequest request = (ShardSearchRequest) indicesRequest;
-            request.requestCache(false);
-            source = request.source();
-        }
-
-        if (documentLevelSecurityEnabled) {
-            if (source != null && source.suggest() != null) {
-                listener.onFailure(new ElasticsearchSecurityException("Suggest isn't supported if document level security is enabled",
-                        RestStatus.BAD_REQUEST));
-            } else if (source != null && source.profile()) {
-                listener.onFailure(new ElasticsearchSecurityException("A search request cannot be profiled if document level security " +
-                    "is enabled", RestStatus.BAD_REQUEST));
+    void disableFeatures(
+        IndicesRequest indicesRequest,
+        Map<String, IndicesAccessControl.IndexAccessControl> indexAccessControlByIndex,
+        ActionListener<Void> listener
+    ) {
+        final SearchRequest request = (SearchRequest) indicesRequest;
+        if (indexAccessControlByIndex.values().stream().anyMatch(iac -> iac.getDocumentPermissions().hasDocumentLevelPermissions())) {
+            if (hasSuggest(request)) {
+                listener.onFailure(
+                    new ElasticsearchSecurityException(
+                        "Suggest isn't supported if document level security is enabled",
+                        RestStatus.BAD_REQUEST
+                    )
+                );
+            } else if (hasProfile(request)) {
+                listener.onFailure(
+                    new ElasticsearchSecurityException(
+                        "A search request cannot be profiled if document level security " + "is enabled",
+                        RestStatus.BAD_REQUEST
+                    )
+                );
             } else {
                 listener.onResponse(null);
             }
@@ -59,6 +59,19 @@ public class SearchRequestInterceptor extends FieldAndDocumentLevelSecurityReque
 
     @Override
     public boolean supports(IndicesRequest request) {
-        return request instanceof SearchRequest || request instanceof ShardSearchRequest;
+        if (request instanceof SearchRequest searchRequest) {
+            return hasSuggest(searchRequest) || hasProfile(searchRequest);
+        } else {
+            return false;
+        }
     }
+
+    private static boolean hasSuggest(SearchRequest searchRequest) {
+        return searchRequest.source() != null && searchRequest.source().suggest() != null;
+    }
+
+    private static boolean hasProfile(SearchRequest searchRequest) {
+        return searchRequest.source() != null && searchRequest.source().profile();
+    }
+
 }

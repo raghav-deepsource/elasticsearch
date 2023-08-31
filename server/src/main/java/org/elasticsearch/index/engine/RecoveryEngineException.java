@@ -23,14 +23,14 @@ public class RecoveryEngineException extends EngineException {
         this.phase = phase;
     }
 
-    public RecoveryEngineException(StreamInput in) throws IOException{
+    public RecoveryEngineException(StreamInput in) throws IOException {
         super(in);
         phase = in.readInt();
     }
 
     @Override
-    public void writeTo(StreamOutput out) throws IOException {
-        super.writeTo(out);
+    protected void writeTo(StreamOutput out, Writer<Throwable> nestedExceptionsWriter) throws IOException {
+        super.writeTo(out, nestedExceptionsWriter);
         out.writeInt(phase);
     }
 

@@ -11,25 +11,29 @@ import org.elasticsearch.search.DocValueFormat;
 import org.elasticsearch.search.aggregations.Aggregator;
 import org.elasticsearch.search.aggregations.InternalAggregation;
 import org.elasticsearch.search.aggregations.metrics.InternalTDigestPercentileRanks;
+import org.elasticsearch.search.aggregations.metrics.TDigestExecutionHint;
 import org.elasticsearch.search.aggregations.metrics.TDigestState;
 import org.elasticsearch.search.aggregations.support.AggregationContext;
-import org.elasticsearch.search.aggregations.support.ValuesSource;
+import org.elasticsearch.search.aggregations.support.ValuesSourceConfig;
 
 import java.io.IOException;
 import java.util.Map;
 
 public class HistoBackedTDigestPercentileRanksAggregator extends AbstractHistoBackedTDigestPercentilesAggregator {
 
-    public HistoBackedTDigestPercentileRanksAggregator(String name,
-                                     ValuesSource valuesSource,
-                                     AggregationContext context,
-                                     Aggregator parent,
-                                     double[] percents,
-                                     double compression,
-                                     boolean keyed,
-                                     DocValueFormat formatter,
-                                     Map<String, Object> metadata) throws IOException {
-        super(name, valuesSource, context, parent, percents, compression, keyed, formatter, metadata);
+    public HistoBackedTDigestPercentileRanksAggregator(
+        String name,
+        ValuesSourceConfig config,
+        AggregationContext context,
+        Aggregator parent,
+        double[] percents,
+        double compression,
+        TDigestExecutionHint executionHint,
+        boolean keyed,
+        DocValueFormat formatter,
+        Map<String, Object> metadata
+    ) throws IOException {
+        super(name, config, context, parent, percents, compression, executionHint, keyed, formatter, metadata);
     }
 
     @Override
@@ -44,7 +48,7 @@ public class HistoBackedTDigestPercentileRanksAggregator extends AbstractHistoBa
 
     @Override
     public InternalAggregation buildEmptyAggregation() {
-        return new InternalTDigestPercentileRanks(name, keys, new TDigestState(compression), keyed, formatter, metadata());
+        return InternalTDigestPercentileRanks.empty(name, keys, compression, executionHint, keyed, formatter, metadata());
     }
 
     @Override

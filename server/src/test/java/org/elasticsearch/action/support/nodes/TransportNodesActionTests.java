@@ -8,7 +8,7 @@
 
 package org.elasticsearch.action.support.nodes;
 
-import org.elasticsearch.Version;
+import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.action.FailedNodeException;
 import org.elasticsearch.action.support.ActionFilters;
 import org.elasticsearch.action.support.PlainActionFuture;
@@ -17,18 +17,27 @@ import org.elasticsearch.cluster.ClusterName;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.node.DiscoveryNode;
 import org.elasticsearch.cluster.node.DiscoveryNodeRole;
+import org.elasticsearch.cluster.node.DiscoveryNodeUtils;
 import org.elasticsearch.cluster.node.DiscoveryNodes;
 import org.elasticsearch.cluster.service.ClusterService;
+import org.elasticsearch.common.Randomness;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.io.stream.Writeable;
+import org.elasticsearch.core.AbstractRefCounted;
+import org.elasticsearch.core.RefCounted;
+import org.elasticsearch.tasks.CancellableTask;
 import org.elasticsearch.tasks.Task;
+import org.elasticsearch.tasks.TaskCancelHelper;
+import org.elasticsearch.tasks.TaskCancelledException;
 import org.elasticsearch.test.ESTestCase;
+import org.elasticsearch.test.ReachabilityChecker;
 import org.elasticsearch.test.transport.CapturingTransport;
 import org.elasticsearch.threadpool.TestThreadPool;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.TransportRequest;
 import org.elasticsearch.transport.TransportService;
+import org.hamcrest.Matchers;
 import org.junit.After;
 import org.junit.AfterClass;
 import org.junit.Before;
@@ -36,6 +45,8 @@ import org.junit.BeforeClass;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -43,12 +54,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReferenceArray;
-import java.util.function.Supplier;
 
 import static java.util.Collections.emptyMap;
 import static org.elasticsearch.test.ClusterServiceUtils.createClusterService;
 import static org.elasticsearch.test.ClusterServiceUtils.setState;
+import static org.hamcrest.Matchers.greaterThan;
 import static org.mockito.Mockito.mock;
 
 public class TransportNodesActionTests extends ESTestCase {
@@ -59,102 +69,145 @@ public class TransportNodesActionTests extends ESTestCase {
     private CapturingTransport transport;
     private TransportService transportService;
 
-    public void testRequestIsSentToEachNode() throws Exception {
-        TransportNodesAction action = getTestTransportNodesAction();
+    public void testRequestIsSentToEachNode() {
+        TransportNodesAction<TestNodesRequest, TestNodesResponse, TestNodeRequest, TestNodeResponse> action = getTestTransportNodesAction();
         TestNodesRequest request = new TestNodesRequest();
-        PlainActionFuture<TestNodesResponse> listener = new PlainActionFuture<>();
-        action.new AsyncAction(null, request, listener).start();
+        action.execute(null, request, new PlainActionFuture<>());
         Map<String, List<CapturingTransport.CapturedRequest>> capturedRequests = transport.getCapturedRequestsByTargetNodeAndClear();
         int numNodes = clusterService.state().getNodes().getSize();
         // check a request was sent to the right number of nodes
         assertEquals(numNodes, capturedRequests.size());
+        assertTrue(capturedRequests.values().stream().flatMap(Collection::stream).noneMatch(cr -> cr.request().hasReferences()));
     }
 
     public void testNodesSelectors() {
-        TransportNodesAction action = getTestTransportNodesAction();
+        TransportNodesAction<TestNodesRequest, TestNodesResponse, TestNodeRequest, TestNodeResponse> action = getTestTransportNodesAction();
         int numSelectors = randomIntBetween(1, 5);
         Set<String> nodeSelectors = new HashSet<>();
         for (int i = 0; i < numSelectors; i++) {
-            nodeSelectors.add(randomFrom(NodeSelector.values()).selector);
+            nodeSelectors.add(randomFrom("_local", "_master", "master:true", "data:true", "attr:value"));
         }
         int numNodeIds = randomIntBetween(0, 3);
-        String[] nodeIds = clusterService.state().nodes().getNodes().keys().toArray(String.class);
+        String[] nodeIds = clusterService.state().nodes().getNodes().keySet().toArray(new String[0]);
         for (int i = 0; i < numNodeIds; i++) {
             String nodeId = randomFrom(nodeIds);
             nodeSelectors.add(nodeId);
         }
-        String[] finalNodesIds = nodeSelectors.toArray(new String[nodeSelectors.size()]);
+        String[] finalNodesIds = nodeSelectors.toArray(String[]::new);
         TestNodesRequest request = new TestNodesRequest(finalNodesIds);
-        action.new AsyncAction(null, request, new PlainActionFuture<>()).start();
+        action.execute(null, request, new PlainActionFuture<>());
         Map<String, List<CapturingTransport.CapturedRequest>> capturedRequests = transport.getCapturedRequestsByTargetNodeAndClear();
         assertEquals(clusterService.state().nodes().resolveNodes(finalNodesIds).length, capturedRequests.size());
     }
 
-    public void testNewResponseNullArray() {
-        TransportNodesAction<TestNodesRequest, TestNodesResponse, TestNodeRequest, TestNodeResponse> action = getTestTransportNodesAction();
-        final PlainActionFuture<TestNodesResponse> future = new PlainActionFuture<>();
-        action.newResponse(new Task(1, "test", "test", "", null, emptyMap()), new TestNodesRequest(), null, future);
-        expectThrows(NullPointerException.class, future::actionGet);
-    }
-
-    public void testNewResponse() {
-        TestTransportNodesAction action = getTestTransportNodesAction();
-        TestNodesRequest request = new TestNodesRequest();
-        List<TestNodeResponse> expectedNodeResponses = mockList(TestNodeResponse::new, randomIntBetween(0, 2));
-        expectedNodeResponses.add(new TestNodeResponse());
-        List<FailedNodeException> failures = mockList(
-            () -> new FailedNodeException(
-                randomAlphaOfLength(8),
-                randomAlphaOfLength(8),
-                new IllegalStateException(randomAlphaOfLength(8))),
-            randomIntBetween(0, 2));
-
-        List<Object> allResponses = new ArrayList<>(expectedNodeResponses);
-        allResponses.addAll(failures);
-
-        Collections.shuffle(allResponses, random());
-
-        AtomicReferenceArray<?> atomicArray = new AtomicReferenceArray<>(allResponses.toArray());
-
-        final PlainActionFuture<TestNodesResponse> future = new PlainActionFuture<>();
-        action.newResponse(new Task(1, "test", "test", "", null, emptyMap()), request, atomicArray, future);
-        TestNodesResponse response = future.actionGet();
-
-        assertSame(request, response.request);
-        // note: I shuffled the overall list, so it's not possible to guarantee that it's in the right order
-        assertTrue(expectedNodeResponses.containsAll(response.getNodes()));
-        assertTrue(failures.containsAll(response.failures()));
-    }
-
-    public void testCustomResolving() throws Exception {
-        TransportNodesAction action = getDataNodesOnlyTransportNodesAction(transportService);
+    public void testCustomResolving() {
+        TransportNodesAction<TestNodesRequest, TestNodesResponse, TestNodeRequest, TestNodeResponse> action =
+            getDataNodesOnlyTransportNodesAction(transportService);
         TestNodesRequest request = new TestNodesRequest(randomBoolean() ? null : generateRandomStringArray(10, 5, false, true));
-        PlainActionFuture<TestNodesResponse> listener = new PlainActionFuture<>();
-        action.new AsyncAction(null, request, listener).start();
+        action.execute(null, request, new PlainActionFuture<>());
         Map<String, List<CapturingTransport.CapturedRequest>> capturedRequests = transport.getCapturedRequestsByTargetNodeAndClear();
         // check requests were only sent to data nodes
         for (String nodeTarget : capturedRequests.keySet()) {
-            assertTrue(clusterService.state().nodes().get(nodeTarget).isDataNode());
+            assertTrue(clusterService.state().nodes().get(nodeTarget).canContainData());
         }
         assertEquals(clusterService.state().nodes().getDataNodes().size(), capturedRequests.size());
     }
 
-    private <T> List<T> mockList(Supplier<T> supplier, int size) {
-        List<T> failures = new ArrayList<>(size);
-        for (int i = 0; i < size; ++i) {
-            failures.add(supplier.get());
+    public void testResponseAggregation() {
+        final TestTransportNodesAction action = getTestTransportNodesAction();
+
+        final PlainActionFuture<TestNodesResponse> listener = new PlainActionFuture<>();
+        action.execute(null, new TestNodesRequest(), listener);
+        assertFalse(listener.isDone());
+
+        final Set<String> failedNodeIds = new HashSet<>();
+        final Set<DiscoveryNode> successfulNodes = new HashSet<>();
+
+        for (CapturingTransport.CapturedRequest capturedRequest : transport.getCapturedRequestsAndClear()) {
+            if (randomBoolean()) {
+                successfulNodes.add(capturedRequest.node());
+                transport.handleResponse(capturedRequest.requestId(), new TestNodeResponse(capturedRequest.node()));
+            } else {
+                failedNodeIds.add(capturedRequest.node().getId());
+                if (randomBoolean()) {
+                    transport.handleRemoteError(capturedRequest.requestId(), new ElasticsearchException("simulated"));
+                } else {
+                    transport.handleLocalError(capturedRequest.requestId(), new ElasticsearchException("simulated"));
+                }
+            }
         }
-        return failures;
+
+        TestNodesResponse response = listener.actionGet(10, TimeUnit.SECONDS);
+
+        for (TestNodeResponse nodeResponse : response.getNodes()) {
+            assertThat(successfulNodes, Matchers.hasItem(nodeResponse.getNode()));
+        }
+        assertEquals(successfulNodes.size(), response.getNodes().size());
+
+        assertNotEquals(failedNodeIds.isEmpty(), response.hasFailures());
+        for (FailedNodeException failure : response.failures()) {
+            assertThat(failedNodeIds, Matchers.hasItem(failure.nodeId()));
+            if (failure.getCause() instanceof ElasticsearchException elasticsearchException) {
+                final var cause = elasticsearchException.unwrapCause();
+                assertEquals("simulated", cause.getMessage());
+            } else {
+                throw new AssertionError("unexpected exception", failure);
+            }
+        }
+        assertEquals(failedNodeIds.size(), response.failures().size());
     }
 
-    private enum NodeSelector {
-        LOCAL("_local"), ELECTED_MASTER("_master"), MASTER_ELIGIBLE("master:true"), DATA("data:true"), CUSTOM_ATTRIBUTE("attr:value");
+    public void testResponsesReleasedOnCancellation() {
+        final TestTransportNodesAction action = getTestTransportNodesAction();
 
-        private final String selector;
+        final CancellableTask cancellableTask = new CancellableTask(randomLong(), "transport", "action", "", null, emptyMap());
+        final PlainActionFuture<TestNodesResponse> listener = new PlainActionFuture<>();
+        action.execute(cancellableTask, new TestNodesRequest(), listener.delegateResponse((l, e) -> {
+            assert Thread.currentThread().getName().contains("[" + ThreadPool.Names.GENERIC + "]");
+            l.onFailure(e);
+        }));
 
-        NodeSelector(String selector) {
-            this.selector = selector;
+        final List<CapturingTransport.CapturedRequest> capturedRequests = new ArrayList<>(
+            Arrays.asList(transport.getCapturedRequestsAndClear())
+        );
+        Randomness.shuffle(capturedRequests);
+
+        final ReachabilityChecker reachabilityChecker = new ReachabilityChecker();
+        final Runnable nextRequestProcessor = () -> {
+            var capturedRequest = capturedRequests.remove(0);
+            if (randomBoolean()) {
+                // transport.handleResponse may de/serialize the response, releasing it early, so send the response straight to the handler
+                transport.getTransportResponseHandler(capturedRequest.requestId())
+                    .handleResponse(reachabilityChecker.register(new TestNodeResponse(capturedRequest.node())));
+            } else {
+                // handleRemoteError may de/serialize the exception, releasing it early, so just use handleLocalError
+                transport.handleLocalError(
+                    capturedRequest.requestId(),
+                    reachabilityChecker.register(new ElasticsearchException("simulated"))
+                );
+            }
+        };
+
+        assertThat(capturedRequests.size(), greaterThan(2));
+        final var responsesBeforeCancellation = between(1, capturedRequests.size() - 2);
+        for (int i = 0; i < responsesBeforeCancellation; i++) {
+            nextRequestProcessor.run();
         }
+
+        reachabilityChecker.checkReachable();
+        TaskCancelHelper.cancel(cancellableTask, "simulated");
+
+        // responses captured before cancellation are now unreachable
+        reachabilityChecker.ensureUnreachable();
+
+        while (capturedRequests.size() > 0) {
+            // a response sent after cancellation is dropped immediately
+            assertFalse(listener.isDone());
+            nextRequestProcessor.run();
+            reachabilityChecker.ensureUnreachable();
+        }
+
+        expectThrows(TaskCancelledException.class, () -> listener.actionGet(10, TimeUnit.SECONDS));
     }
 
     @BeforeClass
@@ -174,8 +227,14 @@ public class TransportNodesActionTests extends ESTestCase {
         super.setUp();
         transport = new CapturingTransport();
         clusterService = createClusterService(THREAD_POOL);
-        transportService = transport.createTransportService(clusterService.getSettings(), THREAD_POOL,
-            TransportService.NOOP_TRANSPORT_INTERCEPTOR, x -> clusterService.localNode(), null, Collections.emptySet());
+        transportService = transport.createTransportService(
+            clusterService.getSettings(),
+            THREAD_POOL,
+            TransportService.NOOP_TRANSPORT_INTERCEPTOR,
+            x -> clusterService.localNode(),
+            null,
+            Collections.emptySet()
+        );
         transportService.start();
         transportService.acceptIncomingRequests();
         int numNodes = randomIntBetween(3, 10);
@@ -183,7 +242,7 @@ public class TransportNodesActionTests extends ESTestCase {
         List<DiscoveryNode> discoveryNodes = new ArrayList<>();
         for (int i = 0; i < numNodes; i++) {
             Map<String, String> attributes = new HashMap<>();
-            Set<DiscoveryNodeRole> roles = new HashSet<>(randomSubsetOf(DiscoveryNodeRole.BUILT_IN_ROLES));
+            Set<DiscoveryNodeRole> roles = new HashSet<>(randomSubsetOf(DiscoveryNodeRole.roles()));
             if (frequently()) {
                 attributes.put("custom", randomBoolean() ? "match" : randomAlphaOfLengthBetween(3, 5));
             }
@@ -208,13 +267,13 @@ public class TransportNodesActionTests extends ESTestCase {
 
     public TestTransportNodesAction getTestTransportNodesAction() {
         return new TestTransportNodesAction(
-                THREAD_POOL,
-                clusterService,
-                transportService,
-                new ActionFilters(Collections.emptySet()),
-                TestNodesRequest::new,
-                TestNodeRequest::new,
-                ThreadPool.Names.SAME
+            THREAD_POOL,
+            clusterService,
+            transportService,
+            new ActionFilters(Collections.emptySet()),
+            TestNodesRequest::new,
+            TestNodeRequest::new,
+            ThreadPool.Names.GENERIC
         );
     }
 
@@ -226,28 +285,39 @@ public class TransportNodesActionTests extends ESTestCase {
             new ActionFilters(Collections.emptySet()),
             TestNodesRequest::new,
             TestNodeRequest::new,
-            ThreadPool.Names.SAME
+            ThreadPool.Names.GENERIC
         );
     }
 
     private static DiscoveryNode newNode(int nodeId, Map<String, String> attributes, Set<DiscoveryNodeRole> roles) {
         String node = "node_" + nodeId;
-        return new DiscoveryNode(node, node, buildNewFakeTransportAddress(), attributes, roles, Version.CURRENT);
+        return DiscoveryNodeUtils.builder(node).name(node).attributes(attributes).roles(roles).build();
     }
 
-    private static class TestTransportNodesAction
-        extends TransportNodesAction<TestNodesRequest, TestNodesResponse, TestNodeRequest, TestNodeResponse> {
+    private static class TestTransportNodesAction extends TransportNodesAction<
+        TestNodesRequest,
+        TestNodesResponse,
+        TestNodeRequest,
+        TestNodeResponse> {
 
-        TestTransportNodesAction(ThreadPool threadPool, ClusterService clusterService, TransportService
-                transportService, ActionFilters actionFilters, Writeable.Reader<TestNodesRequest> request,
-                                 Writeable.Reader<TestNodeRequest> nodeRequest, String nodeExecutor) {
-            super("indices:admin/test", threadPool, clusterService, transportService, actionFilters,
-                request, nodeRequest, nodeExecutor, TestNodeResponse.class);
+        TestTransportNodesAction(
+            ThreadPool threadPool,
+            ClusterService clusterService,
+            TransportService transportService,
+            ActionFilters actionFilters,
+            Writeable.Reader<TestNodesRequest> request,
+            Writeable.Reader<TestNodeRequest> nodeRequest,
+            String nodeExecutor
+        ) {
+            super("indices:admin/test", threadPool, clusterService, transportService, actionFilters, request, nodeRequest, nodeExecutor);
         }
 
         @Override
-        protected TestNodesResponse newResponse(TestNodesRequest request,
-                                                List<TestNodeResponse> responses, List<FailedNodeException> failures) {
+        protected TestNodesResponse newResponse(
+            TestNodesRequest request,
+            List<TestNodeResponse> responses,
+            List<FailedNodeException> failures
+        ) {
             return new TestNodesResponse(clusterService.getClusterName(), request, responses, failures);
         }
 
@@ -257,7 +327,7 @@ public class TransportNodesActionTests extends ESTestCase {
         }
 
         @Override
-        protected TestNodeResponse newNodeResponse(StreamInput in) throws IOException {
+        protected TestNodeResponse newNodeResponse(StreamInput in, DiscoveryNode node) throws IOException {
             return new TestNodeResponse(in);
         }
 
@@ -268,18 +338,23 @@ public class TransportNodesActionTests extends ESTestCase {
 
     }
 
-    private static class DataNodesOnlyTransportNodesAction
-        extends TestTransportNodesAction {
+    private static class DataNodesOnlyTransportNodesAction extends TestTransportNodesAction {
 
-        DataNodesOnlyTransportNodesAction(ThreadPool threadPool, ClusterService clusterService, TransportService
-            transportService, ActionFilters actionFilters, Writeable.Reader<TestNodesRequest> request,
-                                          Writeable.Reader<TestNodeRequest> nodeRequest, String nodeExecutor) {
+        DataNodesOnlyTransportNodesAction(
+            ThreadPool threadPool,
+            ClusterService clusterService,
+            TransportService transportService,
+            ActionFilters actionFilters,
+            Writeable.Reader<TestNodesRequest> request,
+            Writeable.Reader<TestNodeRequest> nodeRequest,
+            String nodeExecutor
+        ) {
             super(threadPool, clusterService, transportService, actionFilters, request, nodeRequest, nodeExecutor);
         }
 
         @Override
         protected void resolveRequest(TestNodesRequest request, ClusterState clusterState) {
-            request.setConcreteNodes(clusterState.nodes().getDataNodes().values().toArray(DiscoveryNode.class));
+            request.setConcreteNodes(clusterState.nodes().getDataNodes().values().toArray(DiscoveryNode[]::new));
         }
     }
 
@@ -287,6 +362,7 @@ public class TransportNodesActionTests extends ESTestCase {
         TestNodesRequest(StreamInput in) throws IOException {
             super(in);
         }
+
         TestNodesRequest(String... nodesIds) {
             super(nodesIds);
         }
@@ -296,8 +372,12 @@ public class TransportNodesActionTests extends ESTestCase {
 
         private final TestNodesRequest request;
 
-        TestNodesResponse(ClusterName clusterName, TestNodesRequest request, List<TestNodeResponse> nodeResponses,
-                          List<FailedNodeException> failures) {
+        TestNodesResponse(
+            ClusterName clusterName,
+            TestNodesRequest request,
+            List<TestNodeResponse> nodeResponses,
+            List<FailedNodeException> failures
+        ) {
             super(clusterName, nodeResponses, failures);
             this.request = request;
         }
@@ -309,21 +389,49 @@ public class TransportNodesActionTests extends ESTestCase {
 
         @Override
         protected void writeNodesTo(StreamOutput out, List<TestNodeResponse> nodes) throws IOException {
-            out.writeList(nodes);
+            out.writeCollection(nodes);
         }
     }
 
     private static class TestNodeRequest extends TransportRequest {
+        private final RefCounted refCounted = AbstractRefCounted.of(() -> {});
+
         TestNodeRequest() {}
+
         TestNodeRequest(StreamInput in) throws IOException {
             super(in);
+        }
+
+        @Override
+        public void incRef() {
+            refCounted.incRef();
+        }
+
+        @Override
+        public boolean tryIncRef() {
+            return refCounted.tryIncRef();
+        }
+
+        @Override
+        public boolean decRef() {
+            return refCounted.decRef();
+        }
+
+        @Override
+        public boolean hasReferences() {
+            return refCounted.hasReferences();
         }
     }
 
     private static class TestNodeResponse extends BaseNodeResponse {
         TestNodeResponse() {
-            super(mock(DiscoveryNode.class));
+            this(mock(DiscoveryNode.class));
         }
+
+        TestNodeResponse(DiscoveryNode node) {
+            super(node);
+        }
+
         protected TestNodeResponse(StreamInput in) throws IOException {
             super(in);
         }

@@ -9,10 +9,11 @@
 package org.elasticsearch.action.get;
 
 import org.elasticsearch.action.ActionListener;
+import org.elasticsearch.action.DelegatingActionListener;
 import org.elasticsearch.action.RoutingMissingException;
 import org.elasticsearch.action.support.ActionFilters;
 import org.elasticsearch.action.support.HandledTransportAction;
-import org.elasticsearch.client.node.NodeClient;
+import org.elasticsearch.client.internal.node.NodeClient;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.block.ClusterBlockLevel;
 import org.elasticsearch.cluster.metadata.IndexNameExpressionResolver;
@@ -20,6 +21,7 @@ import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.util.concurrent.AtomicArray;
 import org.elasticsearch.index.shard.ShardId;
+import org.elasticsearch.indices.IndicesService;
 import org.elasticsearch.tasks.Task;
 import org.elasticsearch.transport.TransportService;
 
@@ -34,13 +36,20 @@ public class TransportMultiGetAction extends HandledTransportAction<MultiGetRequ
     private final IndexNameExpressionResolver indexNameExpressionResolver;
 
     @Inject
-    public TransportMultiGetAction(TransportService transportService, ClusterService clusterService,
-                                   NodeClient client, ActionFilters actionFilters,
-                                   IndexNameExpressionResolver resolver) {
+    public TransportMultiGetAction(
+        TransportService transportService,
+        ClusterService clusterService,
+        NodeClient client,
+        ActionFilters actionFilters,
+        IndexNameExpressionResolver resolver,
+        IndicesService indicesService
+    ) {
         super(MultiGetAction.NAME, transportService, actionFilters, MultiGetRequest::new);
         this.clusterService = clusterService;
         this.client = client;
         this.indexNameExpressionResolver = resolver;
+        // register the internal TransportGetFromTranslogAction
+        new TransportShardMultiGetFomTranslogAction(transportService, indicesService, actionFilters);
     }
 
     @Override
@@ -54,24 +63,20 @@ public class TransportMultiGetAction extends HandledTransportAction<MultiGetRequ
         for (int i = 0; i < request.items.size(); i++) {
             MultiGetRequest.Item item = request.items.get(i);
 
-            String concreteSingleIndex;
+            ShardId shardId;
             try {
-                concreteSingleIndex = indexNameExpressionResolver.concreteSingleIndex(clusterState, item).getName();
-
+                String concreteSingleIndex = indexNameExpressionResolver.concreteSingleIndex(clusterState, item).getName();
                 item.routing(clusterState.metadata().resolveIndexRouting(item.routing(), item.index()));
-                if ((item.routing() == null) && (clusterState.getMetadata().routingRequired(concreteSingleIndex))) {
-                    responses.set(i, newItemFailure(concreteSingleIndex, item.id(),
-                        new RoutingMissingException(concreteSingleIndex, item.id())));
-                    continue;
-                }
+                shardId = clusterService.operationRouting()
+                    .getShards(clusterState, concreteSingleIndex, item.id(), item.routing(), null)
+                    .shardId();
+            } catch (RoutingMissingException e) {
+                responses.set(i, newItemFailure(e.getIndex().getName(), e.getId(), e));
+                continue;
             } catch (Exception e) {
                 responses.set(i, newItemFailure(item.index(), item.id(), e));
                 continue;
             }
-
-            ShardId shardId = clusterService.operationRouting()
-                    .getShards(clusterState, concreteSingleIndex, item.id(), item.routing(), null)
-                    .shardId();
 
             MultiGetShardRequest shardRequest = shardRequests.get(shardId);
             if (shardRequest == null) {
@@ -89,13 +94,15 @@ public class TransportMultiGetAction extends HandledTransportAction<MultiGetRequ
         executeShardAction(listener, responses, shardRequests);
     }
 
-    protected void executeShardAction(ActionListener<MultiGetResponse> listener,
-                                      AtomicArray<MultiGetItemResponse> responses,
-                                      Map<ShardId, MultiGetShardRequest> shardRequests) {
+    protected void executeShardAction(
+        ActionListener<MultiGetResponse> listener,
+        AtomicArray<MultiGetItemResponse> responses,
+        Map<ShardId, MultiGetShardRequest> shardRequests
+    ) {
         final AtomicInteger counter = new AtomicInteger(shardRequests.size());
 
         for (final MultiGetShardRequest shardRequest : shardRequests.values()) {
-            client.executeLocally(TransportShardMultiGetAction.TYPE, shardRequest, new ActionListener.Delegating<>(listener) {
+            client.executeLocally(TransportShardMultiGetAction.TYPE, shardRequest, new DelegatingActionListener<>(listener) {
                 @Override
                 public void onResponse(MultiGetShardResponse response) {
                     for (int i = 0; i < response.locations.size(); i++) {

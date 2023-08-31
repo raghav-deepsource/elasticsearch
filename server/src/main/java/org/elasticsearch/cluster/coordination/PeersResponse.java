@@ -32,7 +32,7 @@ public class PeersResponse extends TransportResponse {
 
     public PeersResponse(StreamInput in) throws IOException {
         masterNode = Optional.ofNullable(in.readOptionalWriteable(DiscoveryNode::new));
-        knownPeers = in.readList(DiscoveryNode::new);
+        knownPeers = in.readImmutableList(DiscoveryNode::new);
         term = in.readLong();
         assert masterNode.isPresent() == false || knownPeers.isEmpty();
     }
@@ -40,7 +40,7 @@ public class PeersResponse extends TransportResponse {
     @Override
     public void writeTo(StreamOutput out) throws IOException {
         out.writeOptionalWriteable(masterNode.orElse(null));
-        out.writeList(knownPeers);
+        out.writeCollection(knownPeers);
         out.writeLong(term);
     }
 
@@ -69,11 +69,7 @@ public class PeersResponse extends TransportResponse {
 
     @Override
     public String toString() {
-        return "PeersResponse{" +
-            "masterNode=" + masterNode +
-            ", knownPeers=" + knownPeers +
-            ", term=" + term +
-            '}';
+        return "PeersResponse{" + "masterNode=" + masterNode + ", knownPeers=" + knownPeers + ", term=" + term + '}';
     }
 
     @Override
@@ -81,9 +77,7 @@ public class PeersResponse extends TransportResponse {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         PeersResponse that = (PeersResponse) o;
-        return term == that.term &&
-            Objects.equals(masterNode, that.masterNode) &&
-            Objects.equals(knownPeers, that.knownPeers);
+        return term == that.term && Objects.equals(masterNode, that.masterNode) && Objects.equals(knownPeers, that.knownPeers);
     }
 
     @Override

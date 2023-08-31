@@ -21,7 +21,13 @@ import java.io.IOException;
  */
 public class RescorePhase {
 
-    public void execute(SearchContext context) {
+    private RescorePhase() {}
+
+    public static void execute(SearchContext context) {
+        if (context.size() == 0 || context.collapse() != null || context.rescore() == null || context.rescore().isEmpty()) {
+            return;
+        }
+
         TopDocs topDocs = context.queryResult().topDocs().topDocs;
         if (topDocs.scoreDocs.length == 0) {
             return;
@@ -31,10 +37,10 @@ public class RescorePhase {
                 topDocs = ctx.rescorer().rescore(topDocs, context.searcher(), ctx);
                 // It is the responsibility of the rescorer to sort the resulted top docs,
                 // here we only assert that this condition is met.
-                assert context.sort() == null && topDocsSortedByScore(topDocs): "topdocs should be sorted after rescore";
+                assert context.sort() == null && topDocsSortedByScore(topDocs) : "topdocs should be sorted after rescore";
             }
-            context.queryResult().topDocs(new TopDocsAndMaxScore(topDocs, topDocs.scoreDocs[0].score),
-                    context.queryResult().sortValueFormats());
+            context.queryResult()
+                .topDocs(new TopDocsAndMaxScore(topDocs, topDocs.scoreDocs[0].score), context.queryResult().sortValueFormats());
         } catch (IOException e) {
             throw new ElasticsearchException("Rescore Phase Failed", e);
         }
@@ -43,7 +49,7 @@ public class RescorePhase {
     /**
      * Returns true if the provided docs are sorted by score.
      */
-    private boolean topDocsSortedByScore(TopDocs topDocs) {
+    private static boolean topDocsSortedByScore(TopDocs topDocs) {
         if (topDocs == null || topDocs.scoreDocs == null || topDocs.scoreDocs.length < 2) {
             return true;
         }

@@ -8,7 +8,7 @@
 package org.elasticsearch.common.util.concurrent;
 
 import org.elasticsearch.common.Priority;
-import org.elasticsearch.common.unit.TimeValue;
+import org.elasticsearch.core.TimeValue;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -32,13 +32,20 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public class PrioritizedEsThreadPoolExecutor extends EsThreadPoolExecutor {
 
-    private static final TimeValue NO_WAIT_TIME_VALUE = TimeValue.timeValueMillis(0);
     private final AtomicLong insertionOrder = new AtomicLong();
     private final Queue<Runnable> current = ConcurrentCollections.newQueue();
     private final ScheduledExecutorService timer;
 
-    public PrioritizedEsThreadPoolExecutor(String name, int corePoolSize, int maximumPoolSize, long keepAliveTime, TimeUnit unit,
-                                    ThreadFactory threadFactory, ThreadContext contextHolder, ScheduledExecutorService timer) {
+    public PrioritizedEsThreadPoolExecutor(
+        String name,
+        int corePoolSize,
+        int maximumPoolSize,
+        long keepAliveTime,
+        TimeUnit unit,
+        ThreadFactory threadFactory,
+        ThreadContext contextHolder,
+        ScheduledExecutorService timer
+    ) {
         super(name, corePoolSize, maximumPoolSize, keepAliveTime, unit, new PriorityBlockingQueue<>(), threadFactory, contextHolder);
         this.timer = timer;
     }
@@ -50,36 +57,9 @@ public class PrioritizedEsThreadPoolExecutor extends EsThreadPoolExecutor {
         return pending.toArray(new Pending[pending.size()]);
     }
 
-    public int getNumberOfPendingTasks() {
-        int size = current.size();
-        size += getQueue().size();
-        return size;
-    }
-
-    /**
-     * Returns the waiting time of the first task in the queue
-     */
-    public TimeValue getMaxTaskWaitTime() {
-        if (getQueue().size() == 0) {
-            return NO_WAIT_TIME_VALUE;
-        }
-
-        long now = System.nanoTime();
-        long oldestCreationDateInNanos = now;
-        for (Runnable queuedRunnable : getQueue()) {
-            if (queuedRunnable instanceof PrioritizedRunnable) {
-                oldestCreationDateInNanos = Math.min(oldestCreationDateInNanos,
-                        ((PrioritizedRunnable) queuedRunnable).getCreationDateInNanos());
-            }
-        }
-
-        return TimeValue.timeValueNanos(now - oldestCreationDateInNanos);
-    }
-
     private void addPending(List<Runnable> runnables, List<Pending> pending, boolean executing) {
         for (Runnable runnable : runnables) {
-            if (runnable instanceof TieBreakingPrioritizedRunnable) {
-                TieBreakingPrioritizedRunnable t = (TieBreakingPrioritizedRunnable) runnable;
+            if (runnable instanceof TieBreakingPrioritizedRunnable t) {
                 Runnable innerRunnable = t.runnable;
                 if (innerRunnable != null) {
                     /** innerRunnable can be null if task is finished but not removed from executor yet,
@@ -87,8 +67,7 @@ public class PrioritizedEsThreadPoolExecutor extends EsThreadPoolExecutor {
                      */
                     pending.add(new Pending(super.unwrap(innerRunnable), t.priority(), t.insertionOrder, executing));
                 }
-            } else if (runnable instanceof PrioritizedFutureTask) {
-                PrioritizedFutureTask t = (PrioritizedFutureTask) runnable;
+            } else if (runnable instanceof PrioritizedFutureTask<?> t) {
                 Object task = t.task;
                 if (t.task instanceof Runnable) {
                     task = super.unwrap((Runnable) t.task);
@@ -161,7 +140,7 @@ public class PrioritizedEsThreadPoolExecutor extends EsThreadPoolExecutor {
         if ((callable instanceof PrioritizedCallable) == false) {
             callable = PrioritizedCallable.wrap(callable, Priority.NORMAL);
         }
-        return new PrioritizedFutureTask<>((PrioritizedCallable)callable, insertionOrder.incrementAndGet());
+        return new PrioritizedFutureTask<T>((PrioritizedCallable<T>) callable, insertionOrder.incrementAndGet());
     }
 
     public static class Pending {
@@ -197,7 +176,7 @@ public class PrioritizedEsThreadPoolExecutor extends EsThreadPoolExecutor {
         public void run() {
             synchronized (this) {
                 // make the task as stared. This is needed for synchronization with the timeout handling
-                // see  #scheduleTimeout()
+                // see #scheduleTimeout()
                 started = true;
                 FutureUtils.cancel(timeoutFuture);
             }
@@ -219,12 +198,9 @@ public class PrioritizedEsThreadPoolExecutor extends EsThreadPoolExecutor {
                     throw new IllegalStateException("scheduleTimeout may only be called once");
                 }
                 if (started == false) {
-                    timeoutFuture = timer.schedule(new Runnable() {
-                        @Override
-                        public void run() {
-                            if (remove(TieBreakingPrioritizedRunnable.this)) {
-                                runAndClean(timeoutCallback);
-                            }
+                    timeoutFuture = timer.schedule(() -> {
+                        if (remove(TieBreakingPrioritizedRunnable.this)) {
+                            runAndClean(timeoutCallback);
                         }
                     }, timeValue.nanos(), TimeUnit.NANOSECONDS);
                 }
@@ -252,7 +228,7 @@ public class PrioritizedEsThreadPoolExecutor extends EsThreadPoolExecutor {
 
     }
 
-    private static final class PrioritizedFutureTask<T> extends FutureTask<T> implements Comparable<PrioritizedFutureTask> {
+    private static final class PrioritizedFutureTask<T> extends FutureTask<T> implements Comparable<PrioritizedFutureTask<T>> {
 
         final Object task;
         final Priority priority;
@@ -273,7 +249,7 @@ public class PrioritizedEsThreadPoolExecutor extends EsThreadPoolExecutor {
         }
 
         @Override
-        public int compareTo(PrioritizedFutureTask pft) {
+        public int compareTo(PrioritizedFutureTask<T> pft) {
             int res = priority.compareTo(pft.priority);
             if (res != 0) {
                 return res;

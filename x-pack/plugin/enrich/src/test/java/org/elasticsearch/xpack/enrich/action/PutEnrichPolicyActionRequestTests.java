@@ -7,8 +7,8 @@
 package org.elasticsearch.xpack.enrich.action;
 
 import org.elasticsearch.common.io.stream.Writeable;
-import org.elasticsearch.common.xcontent.XContentType;
 import org.elasticsearch.test.AbstractWireSerializingTestCase;
+import org.elasticsearch.xcontent.XContentType;
 import org.elasticsearch.xpack.core.enrich.EnrichPolicy;
 import org.elasticsearch.xpack.core.enrich.action.PutEnrichPolicyAction;
 
@@ -20,6 +20,11 @@ public class PutEnrichPolicyActionRequestTests extends AbstractWireSerializingTe
     protected PutEnrichPolicyAction.Request createTestInstance() {
         final EnrichPolicy policy = randomEnrichPolicy(XContentType.JSON);
         return new PutEnrichPolicyAction.Request(randomAlphaOfLength(3), policy);
+    }
+
+    @Override
+    protected PutEnrichPolicyAction.Request mutateInstance(PutEnrichPolicyAction.Request instance) {
+        return null;// TODO implement https://github.com/elastic/elasticsearch/issues/25929
     }
 
     @Override

@@ -6,24 +6,25 @@
  */
 package org.elasticsearch.xpack.core.ml.inference.trainedmodel;
 
-import org.elasticsearch.Version;
-import org.elasticsearch.common.ParseField;
+import org.elasticsearch.TransportVersion;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
-import org.elasticsearch.common.xcontent.ObjectParser;
-import org.elasticsearch.common.xcontent.XContentBuilder;
-import org.elasticsearch.common.xcontent.XContentParser;
+import org.elasticsearch.xcontent.ObjectParser;
+import org.elasticsearch.xcontent.ParseField;
+import org.elasticsearch.xcontent.XContentBuilder;
+import org.elasticsearch.xcontent.XContentParser;
+import org.elasticsearch.xpack.core.ml.MlConfigVersion;
 
 import java.io.IOException;
 import java.util.Objects;
 
-public class RegressionConfig implements LenientlyParsedInferenceConfig, StrictlyParsedInferenceConfig  {
+public class RegressionConfig implements LenientlyParsedInferenceConfig, StrictlyParsedInferenceConfig {
 
     public static final ParseField NAME = new ParseField("regression");
-    private static final Version MIN_SUPPORTED_VERSION = Version.V_7_6_0;
+    private static final MlConfigVersion MIN_SUPPORTED_VERSION = MlConfigVersion.V_7_6_0;
+    private static final TransportVersion MIN_SUPPORTED_TRANSPORT_VERSION = TransportVersion.V_7_6_0;
     public static final ParseField RESULTS_FIELD = new ParseField("results_field");
     public static final ParseField NUM_TOP_FEATURE_IMPORTANCE_VALUES = new ParseField("num_top_feature_importance_values");
-    public static final String DEFAULT_RESULTS_FIELD = "predicted_value";
 
     public static RegressionConfig EMPTY_PARAMS = new RegressionConfig(DEFAULT_RESULTS_FIELD, null);
 
@@ -34,7 +35,8 @@ public class RegressionConfig implements LenientlyParsedInferenceConfig, Strictl
         ObjectParser<RegressionConfig.Builder, Void> parser = new ObjectParser<>(
             NAME.getPreferredName(),
             lenient,
-            RegressionConfig.Builder::new);
+            RegressionConfig.Builder::new
+        );
         parser.declareString(RegressionConfig.Builder::setResultsField, RESULTS_FIELD);
         parser.declareInt(RegressionConfig.Builder::setNumTopFeatureImportanceValues, NUM_TOP_FEATURE_IMPORTANCE_VALUES);
         return parser;
@@ -58,8 +60,9 @@ public class RegressionConfig implements LenientlyParsedInferenceConfig, Strictl
     public RegressionConfig(String resultsField, Integer numTopFeatureImportanceValues) {
         this.resultsField = resultsField == null ? DEFAULT_RESULTS_FIELD : resultsField;
         if (numTopFeatureImportanceValues != null && numTopFeatureImportanceValues < 0) {
-            throw new IllegalArgumentException("[" + NUM_TOP_FEATURE_IMPORTANCE_VALUES.getPreferredName() +
-                "] must be greater than or equal to 0");
+            throw new IllegalArgumentException(
+                "[" + NUM_TOP_FEATURE_IMPORTANCE_VALUES.getPreferredName() + "] must be greater than or equal to 0"
+            );
         }
         this.numTopFeatureImportanceValues = numTopFeatureImportanceValues == null ? 0 : numTopFeatureImportanceValues;
     }
@@ -73,6 +76,7 @@ public class RegressionConfig implements LenientlyParsedInferenceConfig, Strictl
         return numTopFeatureImportanceValues;
     }
 
+    @Override
     public String getResultsField() {
         return resultsField;
     }
@@ -80,6 +84,11 @@ public class RegressionConfig implements LenientlyParsedInferenceConfig, Strictl
     @Override
     public boolean requestingImportance() {
         return numTopFeatureImportanceValues > 0;
+    }
+
+    @Override
+    public boolean isAllocateOnly() {
+        return false;
     }
 
     @Override
@@ -111,7 +120,7 @@ public class RegressionConfig implements LenientlyParsedInferenceConfig, Strictl
     public boolean equals(Object o) {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
-        RegressionConfig that = (RegressionConfig)o;
+        RegressionConfig that = (RegressionConfig) o;
         return Objects.equals(this.resultsField, that.resultsField)
             && Objects.equals(this.numTopFeatureImportanceValues, that.numTopFeatureImportanceValues);
     }
@@ -127,8 +136,13 @@ public class RegressionConfig implements LenientlyParsedInferenceConfig, Strictl
     }
 
     @Override
-    public Version getMinimalSupportedVersion() {
-        return requestingImportance() ? Version.V_7_7_0 : MIN_SUPPORTED_VERSION;
+    public MlConfigVersion getMinimalSupportedMlConfigVersion() {
+        return requestingImportance() ? MlConfigVersion.V_7_7_0 : MIN_SUPPORTED_VERSION;
+    }
+
+    @Override
+    public TransportVersion getMinimalSupportedTransportVersion() {
+        return requestingImportance() ? TransportVersion.V_7_7_0 : MIN_SUPPORTED_TRANSPORT_VERSION;
     }
 
     public static Builder builder() {

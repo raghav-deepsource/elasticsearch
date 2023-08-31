@@ -13,21 +13,17 @@ import org.apache.lucene.index.DocValues;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.OrdinalMap;
 import org.apache.lucene.index.SortedSetDocValues;
-import org.apache.lucene.util.Accountable;
 import org.apache.lucene.util.packed.PackedInts;
 import org.elasticsearch.common.breaker.CircuitBreaker;
-import org.elasticsearch.common.unit.TimeValue;
+import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.index.fielddata.IndexOrdinalsFieldData;
 import org.elasticsearch.index.fielddata.LeafOrdinalsFieldData;
-import org.elasticsearch.index.fielddata.ScriptDocValues;
 import org.elasticsearch.index.fielddata.plain.AbstractLeafOrdinalsFieldData;
 import org.elasticsearch.indices.breaker.CircuitBreakerService;
+import org.elasticsearch.script.field.ToScriptFieldFactory;
 
 import java.io.IOException;
-import java.util.Collection;
-import java.util.Collections;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Function;
 
 /**
  * Utility class to build global ordinals.
@@ -38,9 +34,13 @@ public enum GlobalOrdinalsBuilder {
     /**
      * Build global ordinals for the provided {@link IndexReader}.
      */
-    public static IndexOrdinalsFieldData build(final IndexReader indexReader, IndexOrdinalsFieldData indexFieldData,
-            CircuitBreakerService breakerService, Logger logger,
-            Function<SortedSetDocValues, ScriptDocValues<?>> scriptFunction) throws IOException {
+    public static IndexOrdinalsFieldData build(
+        final IndexReader indexReader,
+        IndexOrdinalsFieldData indexFieldData,
+        CircuitBreakerService breakerService,
+        Logger logger,
+        ToScriptFieldFactory<SortedSetDocValues> toScriptFieldFactory
+    ) throws IOException {
         assert indexReader.leaves().size() > 1;
         long startTimeNS = System.nanoTime();
 
@@ -54,26 +54,33 @@ public enum GlobalOrdinalsBuilder {
         final long memorySizeInBytes = ordinalMap.ramBytesUsed();
         breakerService.getBreaker(CircuitBreaker.FIELDDATA).addWithoutBreaking(memorySizeInBytes);
 
+        TimeValue took = new TimeValue(System.nanoTime() - startTimeNS, TimeUnit.NANOSECONDS);
         if (logger.isDebugEnabled()) {
-            logger.debug(
-                    "global-ordinals [{}][{}] took [{}]",
-                    indexFieldData.getFieldName(),
-                    ordinalMap.getValueCount(),
-                    new TimeValue(System.nanoTime() - startTimeNS, TimeUnit.NANOSECONDS)
-            );
+            logger.debug("global-ordinals [{}][{}] took [{}]", indexFieldData.getFieldName(), ordinalMap.getValueCount(), took);
         }
-        return new GlobalOrdinalsIndexFieldData(indexFieldData.getFieldName(), indexFieldData.getValuesSourceType(),
-                atomicFD, ordinalMap, memorySizeInBytes, scriptFunction
+        return new GlobalOrdinalsIndexFieldData(
+            indexFieldData.getFieldName(),
+            indexFieldData.getValuesSourceType(),
+            atomicFD,
+            ordinalMap,
+            memorySizeInBytes,
+            toScriptFieldFactory,
+            took
         );
     }
 
-    public static IndexOrdinalsFieldData buildEmpty(IndexReader indexReader, IndexOrdinalsFieldData indexFieldData) throws IOException {
+    public static IndexOrdinalsFieldData buildEmpty(
+        IndexReader indexReader,
+        IndexOrdinalsFieldData indexFieldData,
+        ToScriptFieldFactory<SortedSetDocValues> toScriptFieldFactory
+    ) throws IOException {
         assert indexReader.leaves().size() > 1;
+        long startTimeNS = System.nanoTime();
 
         final LeafOrdinalsFieldData[] atomicFD = new LeafOrdinalsFieldData[indexReader.leaves().size()];
         final SortedSetDocValues[] subs = new SortedSetDocValues[indexReader.leaves().size()];
         for (int i = 0; i < indexReader.leaves().size(); ++i) {
-            atomicFD[i] = new AbstractLeafOrdinalsFieldData(AbstractLeafOrdinalsFieldData.DEFAULT_SCRIPT_FUNCTION) {
+            atomicFD[i] = new AbstractLeafOrdinalsFieldData(toScriptFieldFactory) {
                 @Override
                 public SortedSetDocValues getOrdinalsValues() {
                     return DocValues.emptySortedSet();
@@ -85,19 +92,20 @@ public enum GlobalOrdinalsBuilder {
                 }
 
                 @Override
-                public Collection<Accountable> getChildResources() {
-                    return Collections.emptyList();
-                }
-
-                @Override
-                public void close() {
-                }
+                public void close() {}
             };
             subs[i] = atomicFD[i].getOrdinalsValues();
         }
         final OrdinalMap ordinalMap = OrdinalMap.build(null, subs, PackedInts.DEFAULT);
-        return new GlobalOrdinalsIndexFieldData(indexFieldData.getFieldName(), indexFieldData.getValuesSourceType(),
-                atomicFD, ordinalMap, 0, AbstractLeafOrdinalsFieldData.DEFAULT_SCRIPT_FUNCTION
+        TimeValue took = new TimeValue(System.nanoTime() - startTimeNS, TimeUnit.NANOSECONDS);
+        return new GlobalOrdinalsIndexFieldData(
+            indexFieldData.getFieldName(),
+            indexFieldData.getValuesSourceType(),
+            atomicFD,
+            ordinalMap,
+            0,
+            toScriptFieldFactory,
+            took
         );
     }
 

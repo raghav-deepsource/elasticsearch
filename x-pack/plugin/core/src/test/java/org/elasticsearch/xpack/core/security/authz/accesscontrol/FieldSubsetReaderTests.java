@@ -6,12 +6,13 @@
  */
 package org.elasticsearch.xpack.core.security.authz.accesscontrol;
 
-import org.apache.lucene.analysis.MockAnalyzer;
 import org.apache.lucene.document.BinaryDocValuesField;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.FieldType;
 import org.apache.lucene.document.IntPoint;
+import org.apache.lucene.document.KnnByteVectorField;
+import org.apache.lucene.document.KnnFloatVectorField;
 import org.apache.lucene.document.NumericDocValuesField;
 import org.apache.lucene.document.SortedDocValuesField;
 import org.apache.lucene.document.SortedNumericDocValuesField;
@@ -20,11 +21,13 @@ import org.apache.lucene.document.StoredField;
 import org.apache.lucene.document.StringField;
 import org.apache.lucene.document.TextField;
 import org.apache.lucene.index.BinaryDocValues;
+import org.apache.lucene.index.ByteVectorValues;
 import org.apache.lucene.index.DirectoryReader;
 import org.apache.lucene.index.FieldInfo;
 import org.apache.lucene.index.FieldInfos;
 import org.apache.lucene.index.Fields;
 import org.apache.lucene.index.FilterDirectoryReader;
+import org.apache.lucene.index.FloatVectorValues;
 import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.IndexWriterConfig;
 import org.apache.lucene.index.LeafReader;
@@ -42,27 +45,27 @@ import org.apache.lucene.index.TermState;
 import org.apache.lucene.index.Terms;
 import org.apache.lucene.index.TermsEnum;
 import org.apache.lucene.index.TermsEnum.SeekStatus;
+import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.store.Directory;
+import org.apache.lucene.tests.analysis.MockAnalyzer;
+import org.apache.lucene.tests.util.TestUtil;
 import org.apache.lucene.util.BytesRef;
-import org.apache.lucene.util.TestUtil;
 import org.apache.lucene.util.automaton.Automata;
 import org.apache.lucene.util.automaton.Automaton;
 import org.apache.lucene.util.automaton.CharacterRunAutomaton;
 import org.apache.lucene.util.automaton.Operations;
-import org.elasticsearch.Version;
 import org.elasticsearch.cluster.metadata.IndexMetadata;
 import org.elasticsearch.cluster.metadata.MappingMetadata;
 import org.elasticsearch.cluster.metadata.Metadata;
 import org.elasticsearch.common.Strings;
-import org.elasticsearch.common.collect.ImmutableOpenMap;
 import org.elasticsearch.common.lucene.index.SequentialStoredFieldsLeafReader;
-import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.xcontent.XContentHelper;
-import org.elasticsearch.common.xcontent.XContentType;
-import org.elasticsearch.core.internal.io.IOUtils;
+import org.elasticsearch.core.IOUtils;
+import org.elasticsearch.index.IndexVersion;
 import org.elasticsearch.index.mapper.FieldNamesFieldMapper;
 import org.elasticsearch.index.mapper.SourceFieldMapper;
 import org.elasticsearch.test.ESTestCase;
+import org.elasticsearch.xcontent.XContentType;
 import org.elasticsearch.xpack.core.security.authz.permission.FieldPermissions;
 import org.elasticsearch.xpack.core.security.authz.permission.FieldPermissionsDefinition;
 import org.elasticsearch.xpack.core.security.support.Automatons;
@@ -180,6 +183,70 @@ public class FieldSubsetReaderTests extends ESTestCase {
         IOUtils.close(ir, iw, dir);
     }
 
+    public void testKnnVectors() throws Exception {
+        Directory dir = newDirectory();
+        IndexWriterConfig iwc = new IndexWriterConfig(null);
+        IndexWriter iw = new IndexWriter(dir, iwc);
+
+        Document doc = new Document();
+        doc.add(new KnnFloatVectorField("fieldA", new float[] { 0.1f, 0.2f, 0.3f }));
+        doc.add(new KnnFloatVectorField("fieldB", new float[] { 3.0f, 2.0f, 1.0f }));
+        iw.addDocument(doc);
+
+        DirectoryReader ir = FieldSubsetReader.wrap(DirectoryReader.open(iw), new CharacterRunAutomaton(Automata.makeString("fieldA")));
+        LeafReader leafReader = ir.leaves().get(0).reader();
+
+        // Check that fieldA behaves as normal
+        FloatVectorValues vectorValues = leafReader.getFloatVectorValues("fieldA");
+        assertEquals(3, vectorValues.dimension());
+        assertEquals(1, vectorValues.size());
+        assertEquals(0, vectorValues.nextDoc());
+        assertNotNull(vectorValues.vectorValue());
+
+        TopDocs topDocs = leafReader.searchNearestVectors("fieldA", new float[] { 1.0f, 1.0f, 1.0f }, 5, null, Integer.MAX_VALUE);
+        assertNotNull(topDocs);
+        assertEquals(1, topDocs.scoreDocs.length);
+
+        // Check that we can't see fieldB
+        assertNull(leafReader.getFloatVectorValues("fieldB"));
+        assertNull(leafReader.searchNearestVectors("fieldB", new float[] { 1.0f, 1.0f, 1.0f }, 5, null, Integer.MAX_VALUE));
+
+        TestUtil.checkReader(ir);
+        IOUtils.close(ir, iw, dir);
+    }
+
+    public void testKnnByteVectors() throws Exception {
+        Directory dir = newDirectory();
+        IndexWriterConfig iwc = new IndexWriterConfig(null);
+        IndexWriter iw = new IndexWriter(dir, iwc);
+
+        Document doc = new Document();
+        doc.add(new KnnByteVectorField("fieldA", new byte[] { 1, 2, 3 }));
+        doc.add(new KnnByteVectorField("fieldB", new byte[] { 3, 2, 1 }));
+        iw.addDocument(doc);
+
+        DirectoryReader ir = FieldSubsetReader.wrap(DirectoryReader.open(iw), new CharacterRunAutomaton(Automata.makeString("fieldA")));
+        LeafReader leafReader = ir.leaves().get(0).reader();
+
+        // Check that fieldA behaves as normal
+        ByteVectorValues vectorValues = leafReader.getByteVectorValues("fieldA");
+        assertEquals(3, vectorValues.dimension());
+        assertEquals(1, vectorValues.size());
+        assertEquals(0, vectorValues.nextDoc());
+        assertNotNull(vectorValues.vectorValue());
+
+        TopDocs topDocs = leafReader.searchNearestVectors("fieldA", new byte[] { 1, 1, 1 }, 5, null, Integer.MAX_VALUE);
+        assertNotNull(topDocs);
+        assertEquals(1, topDocs.scoreDocs.length);
+
+        // Check that we can't see fieldB
+        assertNull(leafReader.getByteVectorValues("fieldB"));
+        assertNull(leafReader.searchNearestVectors("fieldB", new byte[] { 1, 1, 1 }, 5, null, Integer.MAX_VALUE));
+
+        TestUtil.checkReader(ir);
+        IOUtils.close(ir, iw, dir);
+    }
+
     /**
      * test filtering two stored fields (string)
      */
@@ -198,10 +265,16 @@ public class FieldSubsetReaderTests extends ESTestCase {
         DirectoryReader ir = FieldSubsetReader.wrap(DirectoryReader.open(iw), new CharacterRunAutomaton(Automata.makeString("fieldA")));
 
         // see only one field
-        Document d2 = ir.document(0);
-        assertEquals(1, d2.getFields().size());
-        assertEquals("testA", d2.get("fieldA"));
-
+        {
+            Document d2 = ir.document(0);
+            assertEquals(1, d2.getFields().size());
+            assertEquals("testA", d2.get("fieldA"));
+        }
+        {
+            Document d2 = ir.storedFields().document(0);
+            assertEquals(1, d2.getFields().size());
+            assertEquals("testA", d2.get("fieldA"));
+        }
         TestUtil.checkReader(ir);
         IOUtils.close(ir, iw, dir);
     }
@@ -224,10 +297,16 @@ public class FieldSubsetReaderTests extends ESTestCase {
         DirectoryReader ir = FieldSubsetReader.wrap(DirectoryReader.open(iw), new CharacterRunAutomaton(Automata.makeString("fieldA")));
 
         // see only one field
-        Document d2 = ir.document(0);
-        assertEquals(1, d2.getFields().size());
-        assertEquals(new BytesRef("testA"), d2.getBinaryValue("fieldA"));
-
+        {
+            Document d2 = ir.document(0);
+            assertEquals(1, d2.getFields().size());
+            assertEquals(new BytesRef("testA"), d2.getBinaryValue("fieldA"));
+        }
+        {
+            Document d2 = ir.storedFields().document(0);
+            assertEquals(1, d2.getFields().size());
+            assertEquals(new BytesRef("testA"), d2.getBinaryValue("fieldA"));
+        }
         TestUtil.checkReader(ir);
         IOUtils.close(ir, iw, dir);
     }
@@ -250,10 +329,16 @@ public class FieldSubsetReaderTests extends ESTestCase {
         DirectoryReader ir = FieldSubsetReader.wrap(DirectoryReader.open(iw), new CharacterRunAutomaton(Automata.makeString("fieldA")));
 
         // see only one field
-        Document d2 = ir.document(0);
-        assertEquals(1, d2.getFields().size());
-        assertEquals(1, d2.getField("fieldA").numericValue());
-
+        {
+            Document d2 = ir.document(0);
+            assertEquals(1, d2.getFields().size());
+            assertEquals(1, d2.getField("fieldA").numericValue());
+        }
+        {
+            Document d2 = ir.storedFields().document(0);
+            assertEquals(1, d2.getFields().size());
+            assertEquals(1, d2.getField("fieldA").numericValue());
+        }
         TestUtil.checkReader(ir);
         IOUtils.close(ir, iw, dir);
     }
@@ -276,10 +361,16 @@ public class FieldSubsetReaderTests extends ESTestCase {
         DirectoryReader ir = FieldSubsetReader.wrap(DirectoryReader.open(iw), new CharacterRunAutomaton(Automata.makeString("fieldA")));
 
         // see only one field
-        Document d2 = ir.document(0);
-        assertEquals(1, d2.getFields().size());
-        assertEquals(1L, d2.getField("fieldA").numericValue());
-
+        {
+            Document d2 = ir.document(0);
+            assertEquals(1, d2.getFields().size());
+            assertEquals(1L, d2.getField("fieldA").numericValue());
+        }
+        {
+            Document d2 = ir.storedFields().document(0);
+            assertEquals(1, d2.getFields().size());
+            assertEquals(1L, d2.getField("fieldA").numericValue());
+        }
         TestUtil.checkReader(ir);
         IOUtils.close(ir, iw, dir);
     }
@@ -302,10 +393,16 @@ public class FieldSubsetReaderTests extends ESTestCase {
         DirectoryReader ir = FieldSubsetReader.wrap(DirectoryReader.open(iw), new CharacterRunAutomaton(Automata.makeString("fieldA")));
 
         // see only one field
-        Document d2 = ir.document(0);
-        assertEquals(1, d2.getFields().size());
-        assertEquals(1F, d2.getField("fieldA").numericValue());
-
+        {
+            Document d2 = ir.document(0);
+            assertEquals(1, d2.getFields().size());
+            assertEquals(1F, d2.getField("fieldA").numericValue());
+        }
+        {
+            Document d2 = ir.storedFields().document(0);
+            assertEquals(1, d2.getFields().size());
+            assertEquals(1F, d2.getField("fieldA").numericValue());
+        }
         TestUtil.checkReader(ir);
         IOUtils.close(ir, iw, dir);
     }
@@ -328,10 +425,16 @@ public class FieldSubsetReaderTests extends ESTestCase {
         DirectoryReader ir = FieldSubsetReader.wrap(DirectoryReader.open(iw), new CharacterRunAutomaton(Automata.makeString("fieldA")));
 
         // see only one field
-        Document d2 = ir.document(0);
-        assertEquals(1, d2.getFields().size());
-        assertEquals(1D, d2.getField("fieldA").numericValue());
-
+        {
+            Document d2 = ir.document(0);
+            assertEquals(1, d2.getFields().size());
+            assertEquals(1D, d2.getField("fieldA").numericValue());
+        }
+        {
+            Document d2 = ir.storedFields().document(0);
+            assertEquals(1, d2.getFields().size());
+            assertEquals(1D, d2.getField("fieldA").numericValue());
+        }
         TestUtil.checkReader(ir);
         IOUtils.close(ir, iw, dir);
     }
@@ -473,7 +576,7 @@ public class FieldSubsetReaderTests extends ESTestCase {
         SortedDocValues values = segmentReader.getSortedDocValues("fieldA");
         assertNotNull(values);
         assertTrue(values.advanceExact(0));
-        assertEquals(new BytesRef("testA"), values.binaryValue());
+        assertEquals(new BytesRef("testA"), values.lookupOrd(values.ordValue()));
         assertNull(segmentReader.getSortedDocValues("fieldB"));
 
         TestUtil.checkReader(ir);
@@ -590,10 +693,16 @@ public class FieldSubsetReaderTests extends ESTestCase {
         DirectoryReader ir = FieldSubsetReader.wrap(DirectoryReader.open(iw), new CharacterRunAutomaton(automaton));
 
         // see only one field
-        Document d2 = ir.document(0);
-        assertEquals(1, d2.getFields().size());
-        assertEquals("{\"fieldA\":\"testA\"}", d2.getBinaryValue(SourceFieldMapper.NAME).utf8ToString());
-
+        {
+            Document d2 = ir.document(0);
+            assertEquals(1, d2.getFields().size());
+            assertEquals("{\"fieldA\":\"testA\"}", d2.getBinaryValue(SourceFieldMapper.NAME).utf8ToString());
+        }
+        {
+            Document d2 = ir.storedFields().document(0);
+            assertEquals(1, d2.getFields().size());
+            assertEquals("{\"fieldA\":\"testA\"}", d2.getBinaryValue(SourceFieldMapper.NAME).utf8ToString());
+        }
         TestUtil.checkReader(ir);
         IOUtils.close(ir, iw, dir);
     }
@@ -643,9 +752,9 @@ public class FieldSubsetReaderTests extends ESTestCase {
         assertEquals(expected, filtered);
 
         // exclude on exact value
-        include = new CharacterRunAutomaton(Operations.minus(
-                Automata.makeAnyString(), Automatons.patterns("foo.bar"),
-                Operations.DEFAULT_MAX_DETERMINIZED_STATES));
+        include = new CharacterRunAutomaton(
+            Operations.minus(Automata.makeAnyString(), Automatons.patterns("foo.bar"), Operations.DEFAULT_DETERMINIZE_WORK_LIMIT)
+        );
         filtered = FieldSubsetReader.filter(map, include, 0);
         expected = new HashMap<>();
         expected.put("bar", "baz");
@@ -654,9 +763,9 @@ public class FieldSubsetReaderTests extends ESTestCase {
         assertEquals(expected, filtered);
 
         // exclude on wildcard
-        include = new CharacterRunAutomaton(Operations.minus(
-                Automata.makeAnyString(), Automatons.patterns("foo.*"),
-                Operations.DEFAULT_MAX_DETERMINIZED_STATES));
+        include = new CharacterRunAutomaton(
+            Operations.minus(Automata.makeAnyString(), Automatons.patterns("foo.*"), Operations.DEFAULT_DETERMINIZE_WORK_LIMIT)
+        );
         filtered = FieldSubsetReader.filter(map, include, 0);
         expected = Collections.singletonMap("bar", "baz");
 
@@ -694,9 +803,9 @@ public class FieldSubsetReaderTests extends ESTestCase {
         assertEquals(expected, filtered);
 
         // exclude on inner array
-        include = new CharacterRunAutomaton(Operations.minus(
-                Automata.makeAnyString(), Automatons.patterns("foo.baz"),
-                Operations.DEFAULT_MAX_DETERMINIZED_STATES));
+        include = new CharacterRunAutomaton(
+            Operations.minus(Automata.makeAnyString(), Automatons.patterns("foo.baz"), Operations.DEFAULT_DETERMINIZE_WORK_LIMIT)
+        );
         filtered = FieldSubsetReader.filter(map, include, 0);
         expected = new HashMap<>();
         subArray = new ArrayList<>();
@@ -709,9 +818,9 @@ public class FieldSubsetReaderTests extends ESTestCase {
         assertEquals(expected, filtered);
 
         // exclude on inner array 2
-        include = new CharacterRunAutomaton(Operations.minus(
-                Automata.makeAnyString(), Automatons.patterns("foo"),
-                Operations.DEFAULT_MAX_DETERMINIZED_STATES));
+        include = new CharacterRunAutomaton(
+            Operations.minus(Automata.makeAnyString(), Automatons.patterns("foo"), Operations.DEFAULT_DETERMINIZE_WORK_LIMIT)
+        );
         filtered = FieldSubsetReader.filter(map, include, 0);
         expected = new HashMap<>();
         subArray = new ArrayList<>();
@@ -936,8 +1045,7 @@ public class FieldSubsetReaderTests extends ESTestCase {
         // we should have the same cache key as before
         assertEquals(1, ir2.numDocs());
         assertEquals(1, ir2.leaves().size());
-        assertSame(ir.leaves().get(0).reader().getCoreCacheHelper().getKey(),
-                ir2.leaves().get(0).reader().getCoreCacheHelper().getKey());
+        assertSame(ir.leaves().get(0).reader().getCoreCacheHelper().getKey(), ir2.leaves().get(0).reader().getCoreCacheHelper().getKey());
 
         TestUtil.checkReader(ir);
         IOUtils.close(ir, ir2, iw, dir);
@@ -992,11 +1100,17 @@ public class FieldSubsetReaderTests extends ESTestCase {
 
         // see no vectors
         assertNull(segmentReader.getTermVectors(0));
+        assertNull(segmentReader.termVectors().get(0));
 
         // see no stored fields
-        Document document = segmentReader.document(0);
-        assertEquals(0, document.getFields().size());
-
+        {
+            Document document = segmentReader.document(0);
+            assertEquals(0, document.getFields().size());
+        }
+        {
+            Document document = segmentReader.storedFields().document(0);
+            assertEquals(0, document.getFields().size());
+        }
         TestUtil.checkReader(ir);
         IOUtils.close(ir, iw, dir);
     }
@@ -1007,12 +1121,21 @@ public class FieldSubsetReaderTests extends ESTestCase {
         IndexWriter iw = new IndexWriter(dir, iwc);
         iw.close();
 
-        final DirectoryReader directoryReader = FieldSubsetReader.wrap(DirectoryReader.open(dir),
-                new CharacterRunAutomaton(Automata.makeString("fieldA")));
-        IllegalArgumentException e = expectThrows(IllegalArgumentException.class, () -> FieldSubsetReader.wrap(directoryReader,
-                new CharacterRunAutomaton(Automata.makeString("fieldA"))));
-        assertThat(e.getMessage(), equalTo("Can't wrap [class org.elasticsearch.xpack.core.security.authz.accesscontrol" +
-                ".FieldSubsetReader$FieldSubsetDirectoryReader] twice"));
+        final DirectoryReader directoryReader = FieldSubsetReader.wrap(
+            DirectoryReader.open(dir),
+            new CharacterRunAutomaton(Automata.makeString("fieldA"))
+        );
+        IllegalArgumentException e = expectThrows(
+            IllegalArgumentException.class,
+            () -> FieldSubsetReader.wrap(directoryReader, new CharacterRunAutomaton(Automata.makeString("fieldA")))
+        );
+        assertThat(
+            e.getMessage(),
+            equalTo(
+                "Can't wrap [class org.elasticsearch.xpack.core.security.authz.accesscontrol"
+                    + ".FieldSubsetReader$FieldSubsetDirectoryReader] twice"
+            )
+        );
         directoryReader.close();
         dir.close();
     }
@@ -1020,16 +1143,17 @@ public class FieldSubsetReaderTests extends ESTestCase {
     @SuppressWarnings("unchecked")
     public void testMappingsFilteringDuelWithSourceFiltering() throws Exception {
         Metadata metadata = Metadata.builder()
-                .put(IndexMetadata.builder("index")
-                        .settings(Settings.builder().put(IndexMetadata.SETTING_VERSION_CREATED, Version.CURRENT)
-                                .put(IndexMetadata.SETTING_NUMBER_OF_SHARDS, 1).put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 0))
-                        .putMapping(MAPPING_TEST_ITEM)).build();
+            .put(IndexMetadata.builder("index").settings(indexSettings(IndexVersion.current(), 1, 0)).putMapping(MAPPING_TEST_ITEM))
+            .build();
 
         {
-            FieldPermissionsDefinition definition = new FieldPermissionsDefinition(new String[]{"*inner1"}, Strings.EMPTY_ARRAY);
+            FieldPermissionsDefinition definition = new FieldPermissionsDefinition(new String[] { "*inner1" }, Strings.EMPTY_ARRAY);
             FieldPermissions fieldPermissions = new FieldPermissions(definition);
-            ImmutableOpenMap<String, MappingMetadata> mappings = metadata.findMappings(new String[]{"index"},
-                    index -> fieldPermissions::grantsAccessTo);
+            Map<String, MappingMetadata> mappings = metadata.findMappings(
+                new String[] { "index" },
+                index -> fieldPermissions::grantsAccessTo,
+                Metadata.ON_NEXT_INDEX_FIND_MAPPINGS_NOOP
+            );
             MappingMetadata index = mappings.get("index");
             Map<String, Object> sourceAsMap = index.getSourceAsMap();
             assertEquals(1, sourceAsMap.size());
@@ -1052,10 +1176,10 @@ public class FieldSubsetReaderTests extends ESTestCase {
             Map<String, Object> stringObjectMap = XContentHelper.convertToMap(XContentType.JSON.xContent(), DOC_TEST_ITEM, false);
             Map<String, Object> filtered = FieldSubsetReader.filter(stringObjectMap, include, 0);
             assertEquals(2, filtered.size());
-            Map<String, Object> object = (Map<String, Object>)filtered.get("object");
+            Map<String, Object> object = (Map<String, Object>) filtered.get("object");
             assertEquals(1, object.size());
             assertTrue(object.containsKey("inner1"));
-            List<Map<String, Object>> nested = (List<Map<String, Object>>)filtered.get("nested");
+            List<Map<String, Object>> nested = (List<Map<String, Object>>) filtered.get("nested");
             assertEquals(2, nested.size());
             for (Map<String, Object> objectMap : nested) {
                 assertEquals(1, objectMap.size());
@@ -1063,10 +1187,13 @@ public class FieldSubsetReaderTests extends ESTestCase {
             }
         }
         {
-            FieldPermissionsDefinition definition = new FieldPermissionsDefinition(new String[]{"object*"}, Strings.EMPTY_ARRAY);
+            FieldPermissionsDefinition definition = new FieldPermissionsDefinition(new String[] { "object*" }, Strings.EMPTY_ARRAY);
             FieldPermissions fieldPermissions = new FieldPermissions(definition);
-            ImmutableOpenMap<String, MappingMetadata> mappings = metadata.findMappings(new String[]{"index"},
-                    index -> fieldPermissions::grantsAccessTo);
+            Map<String, MappingMetadata> mappings = metadata.findMappings(
+                new String[] { "index" },
+                index -> fieldPermissions::grantsAccessTo,
+                Metadata.ON_NEXT_INDEX_FIND_MAPPINGS_NOOP
+            );
             MappingMetadata index = mappings.get("index");
             Map<String, Object> sourceAsMap = index.getSourceAsMap();
             assertEquals(1, sourceAsMap.size());
@@ -1093,16 +1220,19 @@ public class FieldSubsetReaderTests extends ESTestCase {
             Map<String, Object> stringObjectMap = XContentHelper.convertToMap(XContentType.JSON.xContent(), DOC_TEST_ITEM, false);
             Map<String, Object> filtered = FieldSubsetReader.filter(stringObjectMap, include, 0);
             assertEquals(1, filtered.size());
-            Map<String, Object> object = (Map<String, Object>)filtered.get("object");
+            Map<String, Object> object = (Map<String, Object>) filtered.get("object");
             assertEquals(2, object.size());
             assertTrue(object.containsKey("inner1"));
             assertTrue(object.containsKey("inner2"));
         }
         {
-            FieldPermissionsDefinition definition = new FieldPermissionsDefinition(new String[]{"object"}, Strings.EMPTY_ARRAY);
+            FieldPermissionsDefinition definition = new FieldPermissionsDefinition(new String[] { "object" }, Strings.EMPTY_ARRAY);
             FieldPermissions fieldPermissions = new FieldPermissions(definition);
-            ImmutableOpenMap<String, MappingMetadata> mappings = metadata.findMappings(new String[]{"index"},
-                    index -> fieldPermissions::grantsAccessTo);
+            Map<String, MappingMetadata> mappings = metadata.findMappings(
+                new String[] { "index" },
+                index -> fieldPermissions::grantsAccessTo,
+                Metadata.ON_NEXT_INDEX_FIND_MAPPINGS_NOOP
+            );
             MappingMetadata index = mappings.get("index");
             Map<String, Object> sourceAsMap = index.getSourceAsMap();
             assertEquals(1, sourceAsMap.size());
@@ -1117,18 +1247,21 @@ public class FieldSubsetReaderTests extends ESTestCase {
             CharacterRunAutomaton include = new CharacterRunAutomaton(automaton);
             Map<String, Object> stringObjectMap = XContentHelper.convertToMap(XContentType.JSON.xContent(), DOC_TEST_ITEM, false);
             Map<String, Object> filtered = FieldSubsetReader.filter(stringObjectMap, include, 0);
-            //TODO FLS filters out empty objects from source, although they are granted access.
-            //When filtering mappings though we keep them.
+            // TODO FLS filters out empty objects from source, although they are granted access.
+            // When filtering mappings though we keep them.
             assertEquals(0, filtered.size());
             /*assertEquals(1, filtered.size());
             Map<String, Object> object = (Map<String, Object>)filtered.get("object");
             assertEquals(0, object.size());*/
         }
         {
-            FieldPermissionsDefinition definition = new FieldPermissionsDefinition(new String[]{"nested.inner2"}, Strings.EMPTY_ARRAY);
+            FieldPermissionsDefinition definition = new FieldPermissionsDefinition(new String[] { "nested.inner2" }, Strings.EMPTY_ARRAY);
             FieldPermissions fieldPermissions = new FieldPermissions(definition);
-            ImmutableOpenMap<String, MappingMetadata> mappings = metadata.findMappings(new String[]{"index"},
-                    index -> fieldPermissions::grantsAccessTo);
+            Map<String, MappingMetadata> mappings = metadata.findMappings(
+                new String[] { "index" },
+                index -> fieldPermissions::grantsAccessTo,
+                Metadata.ON_NEXT_INDEX_FIND_MAPPINGS_NOOP
+            );
             MappingMetadata index = mappings.get("index");
             Map<String, Object> sourceAsMap = index.getSourceAsMap();
             assertEquals(1, sourceAsMap.size());
@@ -1146,7 +1279,7 @@ public class FieldSubsetReaderTests extends ESTestCase {
             Map<String, Object> stringObjectMap = XContentHelper.convertToMap(XContentType.JSON.xContent(), DOC_TEST_ITEM, false);
             Map<String, Object> filtered = FieldSubsetReader.filter(stringObjectMap, include, 0);
             assertEquals(1, filtered.size());
-            List<Map<String, Object>> nested = (List<Map<String, Object>>)filtered.get("nested");
+            List<Map<String, Object>> nested = (List<Map<String, Object>>) filtered.get("nested");
             assertEquals(2, nested.size());
             for (Map<String, Object> objectMap : nested) {
                 assertEquals(1, objectMap.size());
@@ -1180,7 +1313,7 @@ public class FieldSubsetReaderTests extends ESTestCase {
 
         TestUtil.checkReader(ir);
         assertThat(ir.leaves().size(), Matchers.greaterThanOrEqualTo(1));
-        for (LeafReaderContext context: ir.leaves()) {
+        for (LeafReaderContext context : ir.leaves()) {
             assertThat(context.reader(), Matchers.instanceOf(SequentialStoredFieldsLeafReader.class));
             SequentialStoredFieldsLeafReader lf = (SequentialStoredFieldsLeafReader) context.reader();
             assertNotNull(lf.getSequentialStoredFieldsReader());
@@ -1188,57 +1321,59 @@ public class FieldSubsetReaderTests extends ESTestCase {
         IOUtils.close(ir, iw, dir);
     }
 
-    private static final String DOC_TEST_ITEM = "{\n" +
-            "  \"field_text\" : \"text\",\n" +
-            "  \"object\" : {\n" +
-            "    \"inner1\" : \"text\",\n" +
-            "    \"inner2\" : \"keyword\"\n" +
-            "  },\n" +
-            "  \"nested\" : [\n" +
-            "    {\n" +
-            "      \"inner1\" : 1,\n" +
-            "      \"inner2\" : \"2017/12/12\"\n" +
-            "    },\n" +
-            "    {\n" +
-            "      \"inner1\" : 2,\n" +
-            "      \"inner2\" : \"2017/11/11\"\n" +
-            "    }\n" +
-            "  ]\n" +
-            "}";
+    private static final String DOC_TEST_ITEM = """
+        {
+          "field_text" : "text",
+          "object" : {
+            "inner1" : "text",
+            "inner2" : "keyword"
+          },
+          "nested" : [
+            {
+              "inner1" : 1,
+              "inner2" : "2017/12/12"
+            },
+            {
+              "inner1" : 2,
+              "inner2" : "2017/11/11"
+            }
+          ]
+        }""";
 
-    private static final String MAPPING_TEST_ITEM = "{\n" +
-            "  \"_doc\": {\n" +
-            "    \"properties\" : {\n" +
-            "      \"field_text\" : {\n" +
-            "        \"type\":\"text\"\n" +
-            "      },\n" +
-            "      \"object\" : {\n" +
-            "        \"properties\" : {\n" +
-            "          \"inner1\" : {\n" +
-            "            \"type\": \"text\",\n" +
-            "            \"fields\" : {\n" +
-            "              \"keyword\" : {\n" +
-            "                \"type\" : \"keyword\"\n" +
-            "              }\n" +
-            "            }\n" +
-            "          },\n" +
-            "          \"inner2\" : {\n" +
-            "            \"type\": \"keyword\"\n" +
-            "          }\n" +
-            "        }\n" +
-            "      },\n" +
-            "      \"nested\" : {\n" +
-            "        \"type\":\"nested\",\n" +
-            "        \"properties\" : {\n" +
-            "          \"inner1\" : {\n" +
-            "            \"type\": \"integer\"\n" +
-            "          },\n" +
-            "          \"inner2\" : {\n" +
-            "            \"type\": \"date\"\n" +
-            "          }\n" +
-            "        }\n" +
-            "      }\n" +
-            "    }\n" +
-            "  }\n" +
-            "}";
+    private static final String MAPPING_TEST_ITEM = """
+        {
+          "_doc": {
+            "properties" : {
+              "field_text" : {
+                "type":"text"
+              },
+              "object" : {
+                "properties" : {
+                  "inner1" : {
+                    "type": "text",
+                    "fields" : {
+                      "keyword" : {
+                        "type" : "keyword"
+                      }
+                    }
+                  },
+                  "inner2" : {
+                    "type": "keyword"
+                  }
+                }
+              },
+              "nested" : {
+                "type":"nested",
+                "properties" : {
+                  "inner1" : {
+                    "type": "integer"
+                  },
+                  "inner2" : {
+                    "type": "date"
+                  }
+                }
+              }
+            }
+          }
+        }""";
 }

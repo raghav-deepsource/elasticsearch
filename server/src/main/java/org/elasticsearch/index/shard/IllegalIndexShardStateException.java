@@ -33,14 +33,14 @@ public class IllegalIndexShardStateException extends ElasticsearchException {
         return currentState;
     }
 
-    public IllegalIndexShardStateException(StreamInput in) throws IOException{
+    public IllegalIndexShardStateException(StreamInput in) throws IOException {
         super(in);
         currentState = IndexShardState.fromId(in.readByte());
     }
 
     @Override
-    public void writeTo(StreamOutput out) throws IOException {
-        super.writeTo(out);
+    protected void writeTo(StreamOutput out, Writer<Throwable> nestedExceptionsWriter) throws IOException {
+        super.writeTo(out, nestedExceptionsWriter);
         out.writeByte(currentState.id());
     }
 

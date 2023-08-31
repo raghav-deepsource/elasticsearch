@@ -19,7 +19,6 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.LinkedTransferQueue;
 
-
 public abstract class ConcurrentCollections {
 
     static final int aggressiveConcurrencyLevel;
@@ -46,19 +45,8 @@ public abstract class ConcurrentCollections {
         return new ConcurrentHashMap<>();
     }
 
-    /**
-     * Creates a new CHM with an aggressive concurrency level, aimed at highly updateable long living maps.
-     */
-    public static <V> ConcurrentMapLong<V> newConcurrentMapLongWithAggressiveConcurrency() {
-        return new ConcurrentHashMapLong<>(ConcurrentCollections.<Long, V>newConcurrentMapWithAggressiveConcurrency());
-    }
-
-    public static <V> ConcurrentMapLong<V> newConcurrentMapLong() {
-        return new ConcurrentHashMapLong<>(ConcurrentCollections.<Long, V>newConcurrentMap());
-    }
-
     public static <V> Set<V> newConcurrentSet() {
-        return Collections.newSetFromMap(ConcurrentCollections.<V, Boolean>newConcurrentMap());
+        return Collections.newSetFromMap(ConcurrentCollections.newConcurrentMap());
     }
 
     public static <T> Queue<T> newQueue() {

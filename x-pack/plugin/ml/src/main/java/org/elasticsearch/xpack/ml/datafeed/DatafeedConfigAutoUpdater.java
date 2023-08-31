@@ -9,9 +9,8 @@ package org.elasticsearch.xpack.ml.datafeed;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.apache.logging.log4j.message.ParameterizedMessage;
 import org.elasticsearch.ElasticsearchException;
-import org.elasticsearch.Version;
+import org.elasticsearch.TransportVersion;
 import org.elasticsearch.action.support.IndicesOptions;
 import org.elasticsearch.action.support.PlainActionFuture;
 import org.elasticsearch.cluster.ClusterState;
@@ -26,7 +25,9 @@ import org.elasticsearch.xpack.ml.datafeed.persistence.DatafeedConfigProvider;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.stream.Collectors;
+
+import static java.util.stream.Collectors.toList;
+import static org.elasticsearch.core.Strings.format;
 
 public class DatafeedConfigAutoUpdater implements MlAutoUpdateService.UpdateAction {
 
@@ -40,15 +41,17 @@ public class DatafeedConfigAutoUpdater implements MlAutoUpdateService.UpdateActi
     }
 
     @Override
-    public boolean isMinNodeVersionSupported(Version minNodeVersion) {
-        return minNodeVersion.onOrAfter(Version.V_8_0_0);
+    public boolean isMinTransportVersionSupported(TransportVersion minNodeVersion) {
+        return minNodeVersion.onOrAfter(TransportVersion.V_8_0_0);
     }
 
     @Override
     public boolean isAbleToRun(ClusterState latestState) {
-        String[] indices = expressionResolver.concreteIndexNames(latestState,
+        String[] indices = expressionResolver.concreteIndexNames(
+            latestState,
             IndicesOptions.lenientExpandOpenHidden(),
-            MlConfigIndex.indexName());
+            MlConfigIndex.indexName()
+        );
         for (String index : indices) {
             if (latestState.metadata().hasIndex(index) == false) {
                 continue;
@@ -69,42 +72,47 @@ public class DatafeedConfigAutoUpdater implements MlAutoUpdateService.UpdateActi
     @Override
     public void runUpdate() {
         PlainActionFuture<List<DatafeedConfig.Builder>> getdatafeeds = PlainActionFuture.newFuture();
-        provider.expandDatafeedConfigs("_all", true, getdatafeeds);
+        provider.expandDatafeedConfigs("_all", true, null, getdatafeeds);
         List<DatafeedConfig.Builder> datafeedConfigBuilders = getdatafeeds.actionGet();
         List<DatafeedUpdate> updates = datafeedConfigBuilders.stream()
             .map(DatafeedConfig.Builder::build)
             .filter(DatafeedConfig::aggsRewritten)
-            .map(datafeedConfig -> new DatafeedUpdate.Builder()
-                .setAggregations(datafeedConfig.getAggProvider())
-                .setId(datafeedConfig.getId())
-                .build())
-            .collect(Collectors.toList());
+            .map(
+                datafeedConfig -> new DatafeedUpdate.Builder().setAggregations(datafeedConfig.getAggProvider())
+                    .setId(datafeedConfig.getId())
+                    .build()
+            )
+            .toList();
         if (updates.isEmpty()) {
             return;
         }
 
-        logger.debug(() -> new ParameterizedMessage("{} datafeeds are currently being updated",
-            updates.stream().map(DatafeedUpdate::getId).collect(Collectors.toList())));
+        logger.debug(
+            () -> format("%s datafeeds are currently being updated", updates.stream().map(DatafeedUpdate::getId).collect(toList()))
+        );
 
         List<Exception> failures = new ArrayList<>();
         for (DatafeedUpdate update : updates) {
             PlainActionFuture<DatafeedConfig> updateDatafeeds = PlainActionFuture.newFuture();
-            provider.updateDatefeedConfig(update.getId(),
+            provider.updateDatefeedConfig(
+                update.getId(),
                 update,
                 Collections.emptyMap(),
                 (updatedConfig, listener) -> listener.onResponse(Boolean.TRUE),
-                updateDatafeeds);
+                updateDatafeeds
+            );
             try {
                 updateDatafeeds.actionGet();
-                logger.debug(() -> new ParameterizedMessage("[{}] datafeed successfully updated", update.getId()));
+                logger.debug(() -> "[" + update.getId() + "] datafeed successfully updated");
             } catch (Exception ex) {
-                logger.warn(new ParameterizedMessage("[{}] failed being updated", update.getId()), ex);
+                logger.warn(() -> "[" + update.getId() + "] failed being updated", ex);
                 failures.add(new ElasticsearchException("Failed to update datafeed {}", ex, update.getId()));
             }
         }
         if (failures.isEmpty()) {
-            logger.debug(() -> new ParameterizedMessage("{} datafeeds are finished being updated",
-                updates.stream().map(DatafeedUpdate::getId).collect(Collectors.toList())));
+            logger.debug(
+                () -> format("%s datafeeds are finished being updated", updates.stream().map(DatafeedUpdate::getId).collect(toList()))
+            );
             return;
         }
 

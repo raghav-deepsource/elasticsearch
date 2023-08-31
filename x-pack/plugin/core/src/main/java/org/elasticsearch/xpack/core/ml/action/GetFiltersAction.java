@@ -9,7 +9,6 @@ package org.elasticsearch.xpack.core.ml.action;
 import org.elasticsearch.action.ActionType;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.xcontent.StatusToXContentObject;
-import org.elasticsearch.rest.RestStatus;
 import org.elasticsearch.xpack.core.action.AbstractGetResourcesRequest;
 import org.elasticsearch.xpack.core.action.AbstractGetResourcesResponse;
 import org.elasticsearch.xpack.core.action.util.QueryPage;
@@ -17,6 +16,7 @@ import org.elasticsearch.xpack.core.ml.job.config.MlFilter;
 
 import java.io.IOException;
 
+import static org.elasticsearch.core.Strings.format;
 
 public class GetFiltersAction extends ActionType<GetFiltersAction.Response> {
 
@@ -43,6 +43,11 @@ public class GetFiltersAction extends ActionType<GetFiltersAction.Response> {
         }
 
         @Override
+        public String getCancelableTaskDescription() {
+            return format("get_filters[%s]", getResourceId());
+        }
+
+        @Override
         public String getResourceIdField() {
             return MlFilter.ID.getPreferredName();
         }
@@ -63,15 +68,9 @@ public class GetFiltersAction extends ActionType<GetFiltersAction.Response> {
         }
 
         @Override
-        public RestStatus status() {
-            return RestStatus.OK;
-        }
-
-        @Override
         protected Reader<MlFilter> getReader() {
             return MlFilter::new;
         }
     }
 
 }
-

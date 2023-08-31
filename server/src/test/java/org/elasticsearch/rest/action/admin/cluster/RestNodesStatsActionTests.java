@@ -8,7 +8,9 @@
 
 package org.elasticsearch.rest.action.admin.cluster;
 
-import org.elasticsearch.client.node.NodeClient;
+import org.elasticsearch.action.ClusterStatsLevel;
+import org.elasticsearch.action.NodeStatsLevel;
+import org.elasticsearch.client.internal.node.NodeClient;
 import org.elasticsearch.rest.RestRequest;
 import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.test.rest.FakeRestRequest;
@@ -39,7 +41,8 @@ public class RestNodesStatsActionTests extends ESTestCase {
         final RestRequest request = new FakeRestRequest.Builder(xContentRegistry()).withPath("/_nodes/stats").withParams(params).build();
         final IllegalArgumentException e = expectThrows(
             IllegalArgumentException.class,
-            () -> action.prepareRequest(request, mock(NodeClient.class)));
+            () -> action.prepareRequest(request, mock(NodeClient.class))
+        );
         assertThat(e, hasToString(containsString("request [/_nodes/stats] contains unrecognized metric: [" + metric + "]")));
     }
 
@@ -49,12 +52,16 @@ public class RestNodesStatsActionTests extends ESTestCase {
         final RestRequest request = new FakeRestRequest.Builder(xContentRegistry()).withPath("/_nodes/stats").withParams(params).build();
         final IllegalArgumentException e = expectThrows(
             IllegalArgumentException.class,
-            () -> action.prepareRequest(request, mock(NodeClient.class)));
+            () -> action.prepareRequest(request, mock(NodeClient.class))
+        );
         assertThat(
             e,
             hasToString(
                 containsString(
-                    "request [/_nodes/stats] contains unrecognized metrics: [transprot] -> did you mean [transport]?, [unrecognized]")));
+                    "request [/_nodes/stats] contains unrecognized metrics: [transprot] -> did you mean [transport]?, [unrecognized]"
+                )
+            )
+        );
     }
 
     public void testAllRequestWithOtherMetrics() throws IOException {
@@ -64,7 +71,8 @@ public class RestNodesStatsActionTests extends ESTestCase {
         final RestRequest request = new FakeRestRequest.Builder(xContentRegistry()).withPath("/_nodes/stats").withParams(params).build();
         final IllegalArgumentException e = expectThrows(
             IllegalArgumentException.class,
-            () -> action.prepareRequest(request, mock(NodeClient.class)));
+            () -> action.prepareRequest(request, mock(NodeClient.class))
+        );
         assertThat(e, hasToString(containsString("request [/_nodes/stats] contains _all and individual metrics [_all," + metric + "]")));
     }
 
@@ -76,7 +84,8 @@ public class RestNodesStatsActionTests extends ESTestCase {
         final RestRequest request = new FakeRestRequest.Builder(xContentRegistry()).withPath("/_nodes/stats").withParams(params).build();
         final IllegalArgumentException e = expectThrows(
             IllegalArgumentException.class,
-            () -> action.prepareRequest(request, mock(NodeClient.class)));
+            () -> action.prepareRequest(request, mock(NodeClient.class))
+        );
         assertThat(e, hasToString(containsString("request [/_nodes/stats] contains unrecognized index metric: [" + indexMetric + "]")));
     }
 
@@ -87,12 +96,16 @@ public class RestNodesStatsActionTests extends ESTestCase {
         final RestRequest request = new FakeRestRequest.Builder(xContentRegistry()).withPath("/_nodes/stats").withParams(params).build();
         final IllegalArgumentException e = expectThrows(
             IllegalArgumentException.class,
-            () -> action.prepareRequest(request, mock(NodeClient.class)));
+            () -> action.prepareRequest(request, mock(NodeClient.class))
+        );
         assertThat(
             e,
             hasToString(
                 containsString(
-                    "request [/_nodes/stats] contains unrecognized index metrics: [stroe] -> did you mean [store]?, [unrecognized]")));
+                    "request [/_nodes/stats] contains unrecognized index metrics: [stroe] -> did you mean [store]?, [unrecognized]"
+                )
+            )
+        );
     }
 
     public void testIndexMetricsRequestWithoutIndicesMetric() throws IOException {
@@ -105,11 +118,14 @@ public class RestNodesStatsActionTests extends ESTestCase {
         final RestRequest request = new FakeRestRequest.Builder(xContentRegistry()).withPath("/_nodes/stats").withParams(params).build();
         final IllegalArgumentException e = expectThrows(
             IllegalArgumentException.class,
-            () -> action.prepareRequest(request, mock(NodeClient.class)));
+            () -> action.prepareRequest(request, mock(NodeClient.class))
+        );
         assertThat(
             e,
             hasToString(
-                containsString("request [/_nodes/stats] contains index metrics [" + indexMetric + "] but indices stats not requested")));
+                containsString("request [/_nodes/stats] contains index metrics [" + indexMetric + "] but indices stats not requested")
+            )
+        );
     }
 
     public void testIndexMetricsRequestOnAllRequest() throws IOException {
@@ -120,11 +136,50 @@ public class RestNodesStatsActionTests extends ESTestCase {
         final RestRequest request = new FakeRestRequest.Builder(xContentRegistry()).withPath("/_nodes/stats").withParams(params).build();
         final IllegalArgumentException e = expectThrows(
             IllegalArgumentException.class,
-            () -> action.prepareRequest(request, mock(NodeClient.class)));
+            () -> action.prepareRequest(request, mock(NodeClient.class))
+        );
         assertThat(
             e,
-            hasToString(
-                containsString("request [/_nodes/stats] contains index metrics [" + indexMetric + "] but all stats requested")));
+            hasToString(containsString("request [/_nodes/stats] contains index metrics [" + indexMetric + "] but all stats requested"))
+        );
     }
 
+    public void testLevelValidation() throws IOException {
+        final HashMap<String, String> params = new HashMap<>();
+        params.put("metric", "_all");
+        params.put("level", NodeStatsLevel.NODE.getLevel());
+
+        // node is valid
+        RestRequest request = new FakeRestRequest.Builder(xContentRegistry()).withPath("/_nodes/stats").withParams(params).build();
+        action.prepareRequest(request, mock(NodeClient.class));
+
+        // indices is valid
+        params.put("level", NodeStatsLevel.INDICES.getLevel());
+        request = new FakeRestRequest.Builder(xContentRegistry()).withPath("/_nodes/stats").withParams(params).build();
+        action.prepareRequest(request, mock(NodeClient.class));
+
+        // shards is valid
+        params.put("level", NodeStatsLevel.SHARDS.getLevel());
+        request = new FakeRestRequest.Builder(xContentRegistry()).withPath("/_nodes/stats").withParams(params).build();
+        action.prepareRequest(request, mock(NodeClient.class));
+
+        params.put("level", ClusterStatsLevel.CLUSTER.getLevel());
+        final RestRequest invalidLevelRequest1 = new FakeRestRequest.Builder(xContentRegistry()).withPath("/_stats")
+            .withParams(params)
+            .build();
+
+        IllegalArgumentException e = expectThrows(
+            IllegalArgumentException.class,
+            () -> action.prepareRequest(invalidLevelRequest1, mock(NodeClient.class))
+        );
+        assertThat(e, hasToString(containsString("level parameter must be one of [node] or [indices] or [shards] but was [cluster]")));
+
+        params.put("level", "invalid");
+        final RestRequest invalidLevelRequest = new FakeRestRequest.Builder(xContentRegistry()).withPath("/_nodes/stats")
+            .withParams(params)
+            .build();
+
+        e = expectThrows(IllegalArgumentException.class, () -> action.prepareRequest(invalidLevelRequest, mock(NodeClient.class)));
+        assertThat(e, hasToString(containsString("level parameter must be one of [node] or [indices] or [shards] but was [invalid]")));
+    }
 }

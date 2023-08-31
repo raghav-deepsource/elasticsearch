@@ -7,10 +7,10 @@
 
 package org.elasticsearch.xpack.core;
 
+import org.elasticsearch.cluster.routing.allocation.DataTier;
 import org.elasticsearch.common.io.stream.Writeable;
 import org.elasticsearch.test.AbstractWireSerializingTestCase;
 
-import java.io.IOException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -22,7 +22,7 @@ public class DataTiersFeatureSetUsageTests extends AbstractWireSerializingTestCa
     }
 
     @Override
-    protected DataTiersFeatureSetUsage mutateInstance(DataTiersFeatureSetUsage instance) throws IOException {
+    protected DataTiersFeatureSetUsage mutateInstance(DataTiersFeatureSetUsage instance) {
         return randomValueOtherThan(instance, DataTiersFeatureSetUsageTests::randomUsage);
     }
 
@@ -34,16 +34,22 @@ public class DataTiersFeatureSetUsageTests extends AbstractWireSerializingTestCa
     public static DataTiersFeatureSetUsage randomUsage() {
         List<String> tiers = randomSubsetOf(DataTier.ALL_DATA_TIERS);
         Map<String, DataTiersFeatureSetUsage.TierSpecificStats> stats = new HashMap<>();
-        tiers.forEach(tier ->
-            stats.put(tier, new DataTiersFeatureSetUsage.TierSpecificStats(randomIntBetween(1, 10),
-                randomIntBetween(5, 100),
-                randomIntBetween(0, 1000),
-                randomIntBetween(0, 1000),
-                randomNonNegativeLong(),
-                randomNonNegativeLong(),
-                randomNonNegativeLong(),
-                randomNonNegativeLong(),
-                randomNonNegativeLong())));
+        tiers.forEach(
+            tier -> stats.put(
+                tier,
+                new DataTiersFeatureSetUsage.TierSpecificStats(
+                    randomIntBetween(1, 10),
+                    randomIntBetween(5, 100),
+                    randomIntBetween(0, 1000),
+                    randomIntBetween(0, 1000),
+                    randomNonNegativeLong(),
+                    randomNonNegativeLong(),
+                    randomNonNegativeLong(),
+                    randomNonNegativeLong(),
+                    randomNonNegativeLong()
+                )
+            )
+        );
         return new DataTiersFeatureSetUsage(stats);
     }
 }

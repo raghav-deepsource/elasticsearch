@@ -41,7 +41,7 @@ public abstract class Node<T extends Node<T>> {
 
     public Node(Source source, List<T> children) {
         this.source = (source != null ? source : Source.EMPTY);
-        if (children.contains(null)) {
+        if (containsNull(children)) {
             throw new QlIllegalArgumentException("Null children are not allowed");
         }
         this.children = children;
@@ -109,7 +109,7 @@ public abstract class Node<T extends Node<T>> {
     protected <E> void forEachProperty(Class<E> typeToken, Consumer<? super E> rule) {
         for (Object prop : info().properties()) {
             // skip children (only properties are interesting)
-            if (prop != children && !children.contains(prop) && typeToken.isInstance(prop)) {
+            if (prop != children && children.contains(prop) == false && typeToken.isInstance(prop)) {
                 rule.accept((E) prop);
             }
         }
@@ -221,10 +221,11 @@ public abstract class Node<T extends Node<T>> {
         return (childrenChanged ? replaceChildrenSameSize(transformedChildren) : (T) this);
     }
 
-     public final T replaceChildrenSameSize(List<T> newChildren) {
+    public final T replaceChildrenSameSize(List<T> newChildren) {
         if (newChildren.size() != children.size()) {
             throw new QlIllegalArgumentException(
-                "Expected the same number of children [" + children.size() + "], but received [" + newChildren.size() + "]");
+                "Expected the same number of children [" + children.size() + "], but received [" + newChildren.size() + "]"
+            );
         }
         return replaceChildren(newChildren);
     }
@@ -330,8 +331,7 @@ public abstract class Node<T extends Node<T>> {
                     if (column < depth - 1) {
                         sb.append(" ");
                     }
-                }
-                else {
+                } else {
                     // if the child has no parent (elder on the previous level), it means its the last sibling
                     sb.append((column == depth - 1) ? "\\" : "  ");
                 }
@@ -342,6 +342,7 @@ public abstract class Node<T extends Node<T>> {
 
         sb.append(nodeString());
 
+        @SuppressWarnings("HiddenField")
         List<T> children = children();
         if (children.isEmpty() == false) {
             sb.append("\n");
@@ -365,6 +366,7 @@ public abstract class Node<T extends Node<T>> {
     public String propertiesToString(boolean skipIfChild) {
         StringBuilder sb = new StringBuilder();
 
+        @SuppressWarnings("HiddenField")
         List<?> children = children();
         // eliminate children (they are rendered as part of the tree)
         int remainingProperties = TO_STRING_MAX_PROP;
@@ -387,7 +389,7 @@ public abstract class Node<T extends Node<T>> {
 
                 String stringValue = toString(prop);
 
-                //: Objects.toString(prop);
+                // : Objects.toString(prop);
                 if (maxWidth + stringValue.length() > TO_STRING_MAX_WIDTH) {
                     int cutoff = Math.max(0, TO_STRING_MAX_WIDTH - maxWidth);
                     sb.append(stringValue.substring(0, cutoff));
@@ -427,5 +429,16 @@ public abstract class Node<T extends Node<T>> {
         } else {
             sb.append(Objects.toString(obj));
         }
+    }
+
+    private <U> boolean containsNull(List<U> us) {
+        // Use custom implementation because some implementations of `List.contains` (e.g. ImmutableCollections$AbstractImmutableList) throw
+        // a NPE if any of the elements is null.
+        for (U u : us) {
+            if (u == null) {
+                return true;
+            }
+        }
+        return false;
     }
 }

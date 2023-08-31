@@ -9,18 +9,18 @@ package org.elasticsearch.index.mapper;
 
 import org.apache.lucene.search.MatchAllDocsQuery;
 import org.apache.lucene.search.MatchNoDocsQuery;
-import org.elasticsearch.Version;
 import org.elasticsearch.cluster.metadata.IndexMetadata;
 import org.elasticsearch.common.regex.Regex;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.index.IndexSettings;
-import org.elasticsearch.index.query.SearchExecutionContext;
+import org.elasticsearch.index.IndexVersion;
 import org.elasticsearch.index.query.QueryShardException;
+import org.elasticsearch.index.query.SearchExecutionContext;
 import org.elasticsearch.test.ESTestCase;
 
+import java.util.Collections;
 import java.util.function.Predicate;
 
-import static java.util.Collections.emptyMap;
 import static org.hamcrest.Matchers.containsString;
 
 public class IndexFieldTypeTests extends ESTestCase {
@@ -44,21 +44,42 @@ public class IndexFieldTypeTests extends ESTestCase {
     public void testRegexpQuery() {
         MappedFieldType ft = IndexFieldMapper.IndexFieldType.INSTANCE;
 
-        QueryShardException e = expectThrows(QueryShardException.class, () ->
-            assertEquals(new MatchAllDocsQuery(), ft.regexpQuery("ind.x", 0, 0, 10, null, createContext())));
+        QueryShardException e = expectThrows(
+            QueryShardException.class,
+            () -> assertEquals(new MatchAllDocsQuery(), ft.regexpQuery("ind.x", 0, 0, 10, null, createContext()))
+        );
         assertThat(e.getMessage(), containsString("Can only use regexp queries on keyword and text fields"));
     }
 
     private SearchExecutionContext createContext() {
         IndexMetadata indexMetadata = IndexMetadata.builder("index")
-            .settings(Settings.builder().put(IndexMetadata.SETTING_VERSION_CREATED, Version.CURRENT))
+            .settings(Settings.builder().put(IndexMetadata.SETTING_VERSION_CREATED, IndexVersion.current()))
             .numberOfShards(1)
             .numberOfReplicas(0)
             .build();
         IndexSettings indexSettings = new IndexSettings(indexMetadata, Settings.EMPTY);
 
         Predicate<String> indexNameMatcher = pattern -> Regex.simpleMatch(pattern, "index");
-        return new SearchExecutionContext(0, 0, indexSettings, null, null, null, null, null, null, xContentRegistry(), writableRegistry(),
-            null, null, System::currentTimeMillis, null, indexNameMatcher, () -> true, null, emptyMap());
+        return new SearchExecutionContext(
+            0,
+            0,
+            indexSettings,
+            null,
+            null,
+            null,
+            MappingLookup.EMPTY,
+            null,
+            null,
+            parserConfig(),
+            writableRegistry(),
+            null,
+            null,
+            System::currentTimeMillis,
+            null,
+            indexNameMatcher,
+            () -> true,
+            null,
+            Collections.emptyMap()
+        );
     }
 }

@@ -8,11 +8,10 @@
 
 package org.elasticsearch.common.io.stream;
 
-import com.carrotsearch.hppc.cursors.ObjectCursor;
-import org.elasticsearch.Version;
-import org.elasticsearch.common.collect.ImmutableOpenMap;
+import org.elasticsearch.TransportVersion;
 
 import java.io.IOException;
+import java.util.Map;
 
 /**
  * A {@link NamedWriteable} that has a minimum version associated with it.
@@ -27,7 +26,7 @@ public interface VersionedNamedWriteable extends NamedWriteable {
     /**
      * The minimal version of the recipient this object can be sent to
      */
-    Version getMinimalSupportedVersion();
+    TransportVersion getMinimalSupportedVersion();
 
     /**
      * Tests whether or not the custom should be serialized. The criteria is the output stream must be at least the minimum supported
@@ -40,7 +39,7 @@ public interface VersionedNamedWriteable extends NamedWriteable {
      * @return true if the custom should be serialized and false otherwise
      */
     static <T extends VersionedNamedWriteable> boolean shouldSerialize(final StreamOutput out, final T custom) {
-        return out.getVersion().onOrAfter(custom.getMinimalSupportedVersion());
+        return out.getTransportVersion().onOrAfter(custom.getMinimalSupportedVersion());
     }
 
     /**
@@ -50,19 +49,18 @@ public interface VersionedNamedWriteable extends NamedWriteable {
      * @param customs map of customs
      * @param <T>     type of customs in map
      */
-    static <T extends VersionedNamedWriteable> void writeVersionedWritables(StreamOutput out, ImmutableOpenMap<String, T> customs)
-            throws IOException {
+    static <T extends VersionedNamedWriteable> void writeVersionedWritables(StreamOutput out, Map<String, T> customs) throws IOException {
         // filter out custom states not supported by the other node
         int numberOfCustoms = 0;
-        for (final ObjectCursor<T> cursor : customs.values()) {
-            if (shouldSerialize(out, cursor.value)) {
+        for (final T value : customs.values()) {
+            if (shouldSerialize(out, value)) {
                 numberOfCustoms++;
             }
         }
         out.writeVInt(numberOfCustoms);
-        for (final ObjectCursor<T> cursor : customs.values()) {
-            if (shouldSerialize(out, cursor.value)) {
-                out.writeNamedWriteable(cursor.value);
+        for (final T value : customs.values()) {
+            if (shouldSerialize(out, value)) {
+                out.writeNamedWriteable(value);
             }
         }
     }

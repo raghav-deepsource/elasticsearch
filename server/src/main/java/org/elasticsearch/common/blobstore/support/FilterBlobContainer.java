@@ -8,15 +8,18 @@
 
 package org.elasticsearch.common.blobstore.support;
 
+import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.common.blobstore.BlobContainer;
-import org.elasticsearch.common.blobstore.BlobMetadata;
 import org.elasticsearch.common.blobstore.BlobPath;
 import org.elasticsearch.common.blobstore.DeleteResult;
+import org.elasticsearch.common.blobstore.OptionalBytesReference;
 import org.elasticsearch.common.bytes.BytesReference;
+import org.elasticsearch.core.CheckedConsumer;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.util.List;
+import java.io.OutputStream;
+import java.util.Iterator;
 import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
@@ -62,6 +65,16 @@ public abstract class FilterBlobContainer implements BlobContainer {
     }
 
     @Override
+    public void writeMetadataBlob(
+        String blobName,
+        boolean failIfAlreadyExists,
+        boolean atomic,
+        CheckedConsumer<OutputStream, IOException> writer
+    ) throws IOException {
+        delegate.writeMetadataBlob(blobName, failIfAlreadyExists, atomic, writer);
+    }
+
+    @Override
     public void writeBlobAtomic(String blobName, BytesReference bytes, boolean failIfAlreadyExists) throws IOException {
         delegate.writeBlobAtomic(blobName, bytes, failIfAlreadyExists);
     }
@@ -72,7 +85,7 @@ public abstract class FilterBlobContainer implements BlobContainer {
     }
 
     @Override
-    public void deleteBlobsIgnoringIfNotExists(List<String> blobNames) throws IOException {
+    public void deleteBlobsIgnoringIfNotExists(Iterator<String> blobNames) throws IOException {
         delegate.deleteBlobsIgnoringIfNotExists(blobNames);
     }
 
@@ -86,9 +99,28 @@ public abstract class FilterBlobContainer implements BlobContainer {
         return delegate.children().entrySet().stream().collect(Collectors.toMap(Map.Entry::getKey, e -> wrapChild(e.getValue())));
     }
 
-
     @Override
     public Map<String, BlobMetadata> listBlobsByPrefix(String blobNamePrefix) throws IOException {
         return delegate.listBlobsByPrefix(blobNamePrefix);
+    }
+
+    @Override
+    public void compareAndExchangeRegister(
+        String key,
+        BytesReference expected,
+        BytesReference updated,
+        ActionListener<OptionalBytesReference> listener
+    ) {
+        delegate.compareAndExchangeRegister(key, expected, updated, listener);
+    }
+
+    @Override
+    public void compareAndSetRegister(String key, BytesReference expected, BytesReference updated, ActionListener<Boolean> listener) {
+        delegate.compareAndSetRegister(key, expected, updated, listener);
+    }
+
+    @Override
+    public void getRegister(String key, ActionListener<OptionalBytesReference> listener) {
+        delegate.getRegister(key, listener);
     }
 }

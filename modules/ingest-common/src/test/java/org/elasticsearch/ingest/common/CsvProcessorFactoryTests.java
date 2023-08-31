@@ -10,10 +10,10 @@ package org.elasticsearch.ingest.common;
 
 import org.elasticsearch.test.ESTestCase;
 
-import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
-import static java.util.Collections.emptyMap;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.notNullValue;
@@ -24,7 +24,7 @@ public class CsvProcessorFactoryTests extends ESTestCase {
         CsvProcessor.Factory factory = new CsvProcessor.Factory();
         HashMap<String, Object> properties = new HashMap<>();
         properties.put("field", "field");
-        properties.put("target_fields", Collections.singletonList("target"));
+        properties.put("target_fields", List.of("target"));
         properties.put("quote", "|");
         properties.put("separator", "/");
         properties.put("empty_value", "empty");
@@ -33,12 +33,12 @@ public class CsvProcessorFactoryTests extends ESTestCase {
         CsvProcessor csv = factory.create(null, "csv", null, properties);
         assertThat(csv, notNullValue());
         assertThat(csv.field, equalTo("field"));
-        assertThat(csv.headers, equalTo(new String[]{"target"}));
+        assertThat(csv.headers, equalTo(new String[] { "target" }));
         assertThat(csv.quote, equalTo('|'));
         assertThat(csv.separator, equalTo('/'));
         assertThat(csv.emptyValue, equalTo("empty"));
         assertThat(csv.trim, equalTo(true));
         assertThat(csv.ignoreMissing, equalTo(true));
-        assertThat(properties, is(emptyMap()));
+        assertThat(properties, is(Map.of()));
     }
 }

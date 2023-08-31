@@ -27,9 +27,17 @@ public class EsRelation extends LeafPlan {
     private final boolean frozen;
 
     public EsRelation(Source source, EsIndex index, boolean frozen) {
+        this(source, index, flatten(source, index.mapping()), frozen);
+    }
+
+    public EsRelation(Source source, EsIndex index, List<Attribute> attributes) {
+        this(source, index, attributes, false);
+    }
+
+    private EsRelation(Source source, EsIndex index, List<Attribute> attributes, boolean frozen) {
         super(source);
         this.index = index;
-        this.attrs = flatten(source, index.mapping());
+        this.attrs = attributes;
         this.frozen = frozen;
     }
 
@@ -95,8 +103,7 @@ public class EsRelation extends LeafPlan {
         }
 
         EsRelation other = (EsRelation) obj;
-        return Objects.equals(index, other.index)
-                && frozen == other.frozen;
+        return Objects.equals(index, other.index) && frozen == other.frozen;
     }
 
     @Override

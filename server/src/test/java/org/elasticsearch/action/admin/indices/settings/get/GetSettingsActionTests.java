@@ -36,7 +36,6 @@ import java.util.Collections;
 import java.util.concurrent.TimeUnit;
 
 import static java.util.Collections.emptyList;
-import static java.util.Collections.emptySet;
 import static org.elasticsearch.test.ClusterServiceUtils.createClusterService;
 
 public class GetSettingsActionTests extends ESTestCase {
@@ -51,13 +50,24 @@ public class GetSettingsActionTests extends ESTestCase {
 
     class TestTransportGetSettingsAction extends TransportGetSettingsAction {
         TestTransportGetSettingsAction() {
-            super(GetSettingsActionTests.this.transportService, GetSettingsActionTests.this.clusterService,
-                GetSettingsActionTests.this.threadPool, settingsFilter, new ActionFilters(Collections.emptySet()),
-                new Resolver(), IndexScopedSettings.DEFAULT_SCOPED_SETTINGS);
+            super(
+                GetSettingsActionTests.this.transportService,
+                GetSettingsActionTests.this.clusterService,
+                GetSettingsActionTests.this.threadPool,
+                settingsFilter,
+                new ActionFilters(Collections.emptySet()),
+                new Resolver(),
+                IndexScopedSettings.DEFAULT_SCOPED_SETTINGS
+            );
         }
+
         @Override
-        protected void masterOperation(Task task, GetSettingsRequest request, ClusterState state,
-                                       ActionListener<GetSettingsResponse> listener) {
+        protected void masterOperation(
+            Task task,
+            GetSettingsRequest request,
+            ClusterState state,
+            ActionListener<GetSettingsResponse> listener
+        ) {
             ClusterState stateWithIndex = ClusterStateCreationUtils.state(indexName, 1, 1);
             super.masterOperation(task, request, stateWithIndex, listener);
         }
@@ -67,13 +77,18 @@ public class GetSettingsActionTests extends ESTestCase {
     public void setUp() throws Exception {
         super.setUp();
 
-        settingsFilter = new SettingsModule(Settings.EMPTY, emptyList(), emptyList(), emptySet()).getSettingsFilter();
+        settingsFilter = new SettingsModule(Settings.EMPTY, emptyList(), emptyList()).getSettingsFilter();
         threadPool = new TestThreadPool("GetSettingsActionTests");
         clusterService = createClusterService(threadPool);
         CapturingTransport capturingTransport = new CapturingTransport();
-        transportService = capturingTransport.createTransportService(clusterService.getSettings(), threadPool,
+        transportService = capturingTransport.createTransportService(
+            clusterService.getSettings(),
+            threadPool,
             TransportService.NOOP_TRANSPORT_INTERCEPTOR,
-            boundAddress -> clusterService.localNode(), null, Collections.emptySet());
+            boundAddress -> clusterService.localNode(),
+            null,
+            Collections.emptySet()
+        );
         transportService.start();
         transportService.acceptIncomingRequests();
         getSettingsAction = new GetSettingsActionTests.TestTransportGetSettingsAction();
@@ -89,36 +104,51 @@ public class GetSettingsActionTests extends ESTestCase {
 
     public void testIncludeDefaults() {
         GetSettingsRequest noDefaultsRequest = new GetSettingsRequest().indices(indexName);
-        ActionTestUtils.execute(getSettingsAction, null, noDefaultsRequest, ActionListener.wrap(noDefaultsResponse -> {
-            assertNull("index.refresh_interval should be null as it was never set", noDefaultsResponse.getSetting(indexName,
-                "index.refresh_interval"));
-        }, exception -> {
-            throw new AssertionError(exception);
-        }));
+        ActionTestUtils.execute(
+            getSettingsAction,
+            null,
+            noDefaultsRequest,
+            ActionTestUtils.assertNoFailureListener(
+                noDefaultsResponse -> assertNull(
+                    "index.refresh_interval should be null as it was never set",
+                    noDefaultsResponse.getSetting(indexName, "index.refresh_interval")
+                )
+            )
+        );
 
         GetSettingsRequest defaultsRequest = new GetSettingsRequest().indices(indexName).includeDefaults(true);
 
-        ActionTestUtils.execute(getSettingsAction, null, defaultsRequest, ActionListener.wrap(defaultsResponse -> {
-            assertNotNull("index.refresh_interval should be set as we are including defaults", defaultsResponse.getSetting(indexName,
-                "index.refresh_interval"));
-        }, exception -> {
-            throw new AssertionError(exception);
-        }));
+        ActionTestUtils.execute(
+            getSettingsAction,
+            null,
+            defaultsRequest,
+            ActionTestUtils.assertNoFailureListener(
+                defaultsResponse -> assertNotNull(
+                    "index.refresh_interval should be set as we are including defaults",
+                    defaultsResponse.getSetting(indexName, "index.refresh_interval")
+                )
+            )
+        );
 
     }
 
     public void testIncludeDefaultsWithFiltering() {
-        GetSettingsRequest defaultsRequest = new GetSettingsRequest().indices(indexName).includeDefaults(true)
+        GetSettingsRequest defaultsRequest = new GetSettingsRequest().indices(indexName)
+            .includeDefaults(true)
             .names("index.refresh_interval");
-        ActionTestUtils.execute(getSettingsAction, null, defaultsRequest, ActionListener.wrap(defaultsResponse -> {
-            assertNotNull("index.refresh_interval should be set as we are including defaults", defaultsResponse.getSetting(indexName,
-                "index.refresh_interval"));
-            assertNull("index.number_of_shards should be null as this query is filtered",
-                defaultsResponse.getSetting(indexName, "index.number_of_shards"));
-            assertNull("index.warmer.enabled should be null as this query is filtered",
-                defaultsResponse.getSetting(indexName, "index.warmer.enabled"));
-        }, exception -> {
-            throw new AssertionError(exception);
+        ActionTestUtils.execute(getSettingsAction, null, defaultsRequest, ActionTestUtils.assertNoFailureListener(defaultsResponse -> {
+            assertNotNull(
+                "index.refresh_interval should be set as we are including defaults",
+                defaultsResponse.getSetting(indexName, "index.refresh_interval")
+            );
+            assertNull(
+                "index.number_of_shards should be null as this query is filtered",
+                defaultsResponse.getSetting(indexName, "index.number_of_shards")
+            );
+            assertNull(
+                "index.warmer.enabled should be null as this query is filtered",
+                defaultsResponse.getSetting(indexName, "index.warmer.enabled")
+            );
         }));
     }
 

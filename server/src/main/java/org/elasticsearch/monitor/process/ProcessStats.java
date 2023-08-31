@@ -12,10 +12,9 @@ import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.io.stream.Writeable;
 import org.elasticsearch.common.unit.ByteSizeValue;
-import org.elasticsearch.common.unit.TimeValue;
-import org.elasticsearch.common.xcontent.ToXContent.Params;
-import org.elasticsearch.common.xcontent.ToXContentFragment;
-import org.elasticsearch.common.xcontent.XContentBuilder;
+import org.elasticsearch.core.TimeValue;
+import org.elasticsearch.xcontent.ToXContentFragment;
+import org.elasticsearch.xcontent.XContentBuilder;
 
 import java.io.IOException;
 
@@ -102,7 +101,7 @@ public class ProcessStats implements Writeable, ToXContentFragment {
         }
         if (mem != null) {
             builder.startObject(Fields.MEM);
-            builder.humanReadableField(Fields.TOTAL_VIRTUAL_IN_BYTES, Fields.TOTAL_VIRTUAL, new ByteSizeValue(mem.totalVirtual));
+            builder.humanReadableField(Fields.TOTAL_VIRTUAL_IN_BYTES, Fields.TOTAL_VIRTUAL, ByteSizeValue.ofBytes(mem.totalVirtual));
             builder.endObject();
         }
         builder.endObject();
@@ -127,7 +126,7 @@ public class ProcessStats implements Writeable, ToXContentFragment {
         }
 
         public ByteSizeValue getTotalVirtual() {
-            return new ByteSizeValue(totalVirtual);
+            return ByteSizeValue.ofBytes(totalVirtual);
         }
     }
 

@@ -81,13 +81,15 @@ public class BitArrayTests extends ESTestCase {
     }
 
     public void testAllocation() {
-        MockBigArrays.assertFitsIn(new ByteSizeValue(100), bigArrays -> new BitArray(1, bigArrays));
+        MockBigArrays.assertFitsIn(ByteSizeValue.ofBytes(100), bigArrays -> new BitArray(1, bigArrays));
     }
 
     public void testOr() {
-        try (BitArray bitArray1 = new BitArray(1, BigArrays.NON_RECYCLING_INSTANCE);
-             BitArray bitArray2 = new BitArray(1, BigArrays.NON_RECYCLING_INSTANCE);
-             BitArray bitArrayFull = new BitArray(1, BigArrays.NON_RECYCLING_INSTANCE)) {
+        try (
+            BitArray bitArray1 = new BitArray(1, BigArrays.NON_RECYCLING_INSTANCE);
+            BitArray bitArray2 = new BitArray(1, BigArrays.NON_RECYCLING_INSTANCE);
+            BitArray bitArrayFull = new BitArray(1, BigArrays.NON_RECYCLING_INSTANCE)
+        ) {
             int numBits = randomIntBetween(1000, 10000);
             for (int step = 0; step < 3; step++) {
                 for (int i = 0; i < numBits; i++) {
@@ -150,6 +152,23 @@ public class BitArrayTests extends ESTestCase {
                 }
                 assertEquals(cardinality, bitArray.cardinality());
             }
+        }
+    }
+
+    public void testGetAndSet() {
+        try (BitArray bitArray = new BitArray(1, BigArrays.NON_RECYCLING_INSTANCE)) {
+            assertFalse(bitArray.getAndSet(100));
+            assertFalse(bitArray.getAndSet(1000));
+            assertTrue(bitArray.getAndSet(100));
+            assertFalse(bitArray.getAndSet(101));
+            assertFalse(bitArray.getAndSet(999));
+            assertTrue(bitArray.getAndSet(1000));
+            assertFalse(bitArray.get(99));
+            assertTrue(bitArray.get(100));
+            assertTrue(bitArray.get(101));
+            assertTrue(bitArray.get(999));
+            assertTrue(bitArray.get(1000));
+            assertFalse(bitArray.get(1001));
         }
     }
 }

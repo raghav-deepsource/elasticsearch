@@ -8,22 +8,39 @@
 
 package org.elasticsearch.search.geo;
 
-import org.elasticsearch.common.xcontent.XContentBuilder;
-import org.elasticsearch.common.xcontent.XContentFactory;
+import org.elasticsearch.index.IndexVersion;
+import org.elasticsearch.plugins.Plugin;
+import org.elasticsearch.test.TestGeoShapeFieldMapperPlugin;
+import org.elasticsearch.test.index.IndexVersionUtils;
+import org.elasticsearch.xcontent.XContentBuilder;
+import org.elasticsearch.xcontent.XContentFactory;
 
 import java.io.IOException;
+import java.util.Collection;
+import java.util.Collections;
 
-public class GeoBoundingBoxQueryGeoShapeIT extends AbstractGeoBoundingBoxQueryIT {
+public class GeoBoundingBoxQueryGeoShapeIT extends GeoBoundingBoxQueryIntegTestCase {
+
+    @SuppressWarnings("deprecation")
+    @Override
+    protected Collection<Class<? extends Plugin>> nodePlugins() {
+        return Collections.singleton(TestGeoShapeFieldMapperPlugin.class);
+    }
 
     @Override
     public XContentBuilder getMapping() throws IOException {
-        XContentBuilder xContentBuilder = XContentFactory.jsonBuilder().startObject().startObject("_doc")
-            .startObject("properties").startObject("location").field("type", "geo_shape");
-        if (randomBoolean()) {
-            xContentBuilder.field("strategy", "recursive");
-        }
+        XContentBuilder xContentBuilder = XContentFactory.jsonBuilder()
+            .startObject()
+            .startObject("_doc")
+            .startObject("properties")
+            .startObject("location")
+            .field("type", "geo_shape");
         xContentBuilder.endObject().endObject().endObject().endObject();
         return xContentBuilder;
     }
-}
 
+    @Override
+    public IndexVersion randomSupportedVersion() {
+        return IndexVersionUtils.randomCompatibleVersion(random());
+    }
+}

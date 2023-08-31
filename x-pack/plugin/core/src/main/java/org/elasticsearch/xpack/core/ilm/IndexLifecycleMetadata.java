@@ -6,30 +6,32 @@
  */
 package org.elasticsearch.xpack.core.ilm;
 
-import org.elasticsearch.Version;
-import org.elasticsearch.cluster.AbstractDiffable;
+import org.elasticsearch.TransportVersion;
 import org.elasticsearch.cluster.Diff;
 import org.elasticsearch.cluster.DiffableUtils;
 import org.elasticsearch.cluster.NamedDiff;
+import org.elasticsearch.cluster.SimpleDiffable;
 import org.elasticsearch.cluster.metadata.Metadata;
 import org.elasticsearch.cluster.metadata.Metadata.Custom;
-import org.elasticsearch.common.ParseField;
 import org.elasticsearch.common.Strings;
+import org.elasticsearch.common.collect.Iterators;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
-import org.elasticsearch.common.xcontent.ConstructingObjectParser;
-import org.elasticsearch.common.xcontent.XContentBuilder;
+import org.elasticsearch.common.xcontent.ChunkedToXContentHelper;
+import org.elasticsearch.xcontent.ConstructingObjectParser;
+import org.elasticsearch.xcontent.ParseField;
+import org.elasticsearch.xcontent.ToXContent;
 
 import java.io.IOException;
 import java.util.Collections;
 import java.util.EnumSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.TreeMap;
 import java.util.function.Function;
 import java.util.stream.Collectors;
-
 
 public class IndexLifecycleMetadata implements Metadata.Custom {
     public static final String TYPE = "index_lifecycle";
@@ -38,16 +40,18 @@ public class IndexLifecycleMetadata implements Metadata.Custom {
     public static final IndexLifecycleMetadata EMPTY = new IndexLifecycleMetadata(Collections.emptySortedMap(), OperationMode.RUNNING);
 
     @SuppressWarnings("unchecked")
-    public static final ConstructingObjectParser<IndexLifecycleMetadata, Void> PARSER = new ConstructingObjectParser<>(TYPE,
-            a -> new IndexLifecycleMetadata(
-                    ((List<LifecyclePolicyMetadata>) a[0]).stream()
-                            .collect(Collectors.toMap(LifecyclePolicyMetadata::getName, Function.identity())),
-                    OperationMode.valueOf((String) a[1])));
+    public static final ConstructingObjectParser<IndexLifecycleMetadata, Void> PARSER = new ConstructingObjectParser<>(
+        TYPE,
+        a -> new IndexLifecycleMetadata(
+            ((List<LifecyclePolicyMetadata>) a[0]).stream()
+                .collect(Collectors.toMap(LifecyclePolicyMetadata::getName, Function.identity())),
+            OperationMode.valueOf((String) a[1])
+        )
+    );
     static {
-        PARSER.declareNamedObjects(ConstructingObjectParser.constructorArg(), (p, c, n) -> LifecyclePolicyMetadata.parse(p, n),
-                v -> {
-                    throw new IllegalArgumentException("ordered " + POLICIES_FIELD.getPreferredName() + " are not supported");
-                }, POLICIES_FIELD);
+        PARSER.declareNamedObjects(ConstructingObjectParser.constructorArg(), (p, c, n) -> LifecyclePolicyMetadata.parse(p, n), v -> {
+            throw new IllegalArgumentException("ordered " + POLICIES_FIELD.getPreferredName() + " are not supported");
+        }, POLICIES_FIELD);
         PARSER.declareString(ConstructingObjectParser.constructorArg(), OPERATION_MODE_FIELD);
     }
 
@@ -79,13 +83,19 @@ public class IndexLifecycleMetadata implements Metadata.Custom {
         return policyMetadatas;
     }
 
+    /**
+     * @deprecated use {@link LifecycleOperationMetadata#getILMOperationMode()} instead. This may be incorrect.
+     */
+    @Deprecated(since = "8.7.0")
     public OperationMode getOperationMode() {
         return operationMode;
     }
 
     public Map<String, LifecyclePolicy> getPolicies() {
-        return policyMetadatas.values().stream().map(LifecyclePolicyMetadata::getPolicy)
-                .collect(Collectors.toMap(LifecyclePolicy::getName, Function.identity()));
+        return policyMetadatas.values()
+            .stream()
+            .map(LifecyclePolicyMetadata::getPolicy)
+            .collect(Collectors.toMap(LifecyclePolicy::getName, Function.identity()));
     }
 
     @Override
@@ -94,15 +104,16 @@ public class IndexLifecycleMetadata implements Metadata.Custom {
     }
 
     @Override
-    public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
-        builder.field(POLICIES_FIELD.getPreferredName(), policyMetadatas);
-        builder.field(OPERATION_MODE_FIELD.getPreferredName(), operationMode);
-        return builder;
+    public Iterator<? extends ToXContent> toXContentChunked(ToXContent.Params ignored) {
+        return Iterators.concat(
+            ChunkedToXContentHelper.xContentValuesMap(POLICIES_FIELD.getPreferredName(), policyMetadatas),
+            Iterators.single((builder, params) -> builder.field(OPERATION_MODE_FIELD.getPreferredName(), operationMode))
+        );
     }
 
     @Override
-    public Version getMinimalSupportedVersion() {
-        return Version.CURRENT.minimumCompatibilityVersion();
+    public TransportVersion getMinimalSupportedVersion() {
+        return TransportVersion.MINIMUM_COMPATIBLE;
     }
 
     @Override
@@ -129,13 +140,12 @@ public class IndexLifecycleMetadata implements Metadata.Custom {
             return false;
         }
         IndexLifecycleMetadata other = (IndexLifecycleMetadata) obj;
-        return Objects.equals(policyMetadatas, other.policyMetadatas)
-            && Objects.equals(operationMode, other.operationMode);
+        return Objects.equals(policyMetadatas, other.policyMetadatas) && Objects.equals(operationMode, other.operationMode);
     }
 
     @Override
     public String toString() {
-        return Strings.toString(this, true, true);
+        return Strings.toString(this, false, true);
     }
 
     public static class IndexLifecycleMetadataDiff implements NamedDiff<Metadata.Custom> {
@@ -149,15 +159,20 @@ public class IndexLifecycleMetadata implements Metadata.Custom {
         }
 
         public IndexLifecycleMetadataDiff(StreamInput in) throws IOException {
-            this.policies = DiffableUtils.readJdkMapDiff(in, DiffableUtils.getStringKeySerializer(), LifecyclePolicyMetadata::new,
-                    IndexLifecycleMetadataDiff::readLifecyclePolicyDiffFrom);
+            this.policies = DiffableUtils.readJdkMapDiff(
+                in,
+                DiffableUtils.getStringKeySerializer(),
+                LifecyclePolicyMetadata::new,
+                IndexLifecycleMetadataDiff::readLifecyclePolicyDiffFrom
+            );
             this.operationMode = in.readEnum(OperationMode.class);
         }
 
         @Override
         public Metadata.Custom apply(Metadata.Custom part) {
             TreeMap<String, LifecyclePolicyMetadata> newPolicies = new TreeMap<>(
-                    policies.apply(((IndexLifecycleMetadata) part).policyMetadatas));
+                policies.apply(((IndexLifecycleMetadata) part).policyMetadatas)
+            );
             return new IndexLifecycleMetadata(newPolicies, this.operationMode);
         }
 
@@ -172,8 +187,13 @@ public class IndexLifecycleMetadata implements Metadata.Custom {
             return TYPE;
         }
 
+        @Override
+        public TransportVersion getMinimalSupportedVersion() {
+            return TransportVersion.MINIMUM_COMPATIBLE;
+        }
+
         static Diff<LifecyclePolicyMetadata> readLifecyclePolicyDiffFrom(StreamInput in) throws IOException {
-            return AbstractDiffable.readDiffFrom(LifecyclePolicyMetadata::new, in);
+            return SimpleDiffable.readDiffFrom(LifecyclePolicyMetadata::new, in);
         }
     }
 }

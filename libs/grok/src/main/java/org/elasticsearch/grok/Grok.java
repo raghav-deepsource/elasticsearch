@@ -16,133 +16,93 @@ import org.joni.Regex;
 import org.joni.Region;
 import org.joni.Syntax;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Iterator;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.function.Consumer;
 
 public final class Grok {
-    /**
-     * Patterns built in to the grok library.
-     */
-    public static final Map<String, String> BUILTIN_PATTERNS = loadBuiltinPatterns();
 
     private static final String NAME_GROUP = "name";
     private static final String SUBNAME_GROUP = "subname";
     private static final String PATTERN_GROUP = "pattern";
     private static final String DEFINITION_GROUP = "definition";
-    private static final String GROK_PATTERN =
-            "%\\{" +
-            "(?<name>" +
-            "(?<pattern>[A-z0-9]+)" +
-            "(?::(?<subname>[[:alnum:]@\\[\\]_:.-]+))?" +
-            ")" +
-            "(?:=(?<definition>" +
-            "(?:[^{}]+|\\.+)+" +
-            ")" +
-            ")?" + "\\}";
-    private static final Regex GROK_PATTERN_REGEX = new Regex(GROK_PATTERN.getBytes(StandardCharsets.UTF_8), 0,
-            GROK_PATTERN.getBytes(StandardCharsets.UTF_8).length, Option.NONE, UTF8Encoding.INSTANCE, Syntax.DEFAULT);
+    private static final String GROK_PATTERN = "%\\{"
+        + "(?<name>"
+        + "(?<pattern>[A-z0-9]+)"
+        + "(?::(?<subname>[[:alnum:]@\\[\\]_:.-]+))?"
+        + ")"
+        + "(?:=(?<definition>"
+        + "(?:[^{}]+|\\.+)+"
+        + ")"
+        + ")?"
+        + "\\}";
+    private static final Regex GROK_PATTERN_REGEX = new Regex(
+        GROK_PATTERN.getBytes(StandardCharsets.UTF_8),
+        0,
+        GROK_PATTERN.getBytes(StandardCharsets.UTF_8).length,
+        Option.NONE,
+        UTF8Encoding.INSTANCE,
+        Syntax.DEFAULT
+    );
 
-    private static final int MAX_TO_REGEX_ITERATIONS = 100_000; //sanity limit
+    private static final int MAX_TO_REGEX_ITERATIONS = 100_000; // sanity limit
 
-    private final Map<String, String> patternBank;
     private final boolean namedCaptures;
     private final Regex compiledExpression;
     private final MatcherWatchdog matcherWatchdog;
     private final List<GrokCaptureConfig> captureConfig;
 
-    public Grok(Map<String, String> patternBank, String grokPattern, Consumer<String> logCallBack) {
+    public Grok(PatternBank patternBank, String grokPattern, Consumer<String> logCallBack) {
         this(patternBank, grokPattern, true, MatcherWatchdog.noop(), logCallBack);
     }
 
-    public Grok(Map<String, String> patternBank, String grokPattern, MatcherWatchdog matcherWatchdog, Consumer<String> logCallBack) {
+    public Grok(PatternBank patternBank, String grokPattern, MatcherWatchdog matcherWatchdog, Consumer<String> logCallBack) {
         this(patternBank, grokPattern, true, matcherWatchdog, logCallBack);
     }
 
-    Grok(Map<String, String> patternBank, String grokPattern, boolean namedCaptures, Consumer<String> logCallBack) {
+    Grok(PatternBank patternBank, String grokPattern, boolean namedCaptures, Consumer<String> logCallBack) {
         this(patternBank, grokPattern, namedCaptures, MatcherWatchdog.noop(), logCallBack);
     }
 
-    private Grok(Map<String, String> patternBank, String grokPattern, boolean namedCaptures, MatcherWatchdog matcherWatchdog,
-                 Consumer<String> logCallBack) {
-        this.patternBank = patternBank;
+    private Grok(
+        PatternBank patternBank,
+        String grokPattern,
+        boolean namedCaptures,
+        MatcherWatchdog matcherWatchdog,
+        Consumer<String> logCallBack
+    ) {
         this.namedCaptures = namedCaptures;
         this.matcherWatchdog = matcherWatchdog;
 
-        for (Map.Entry<String, String> entry : patternBank.entrySet()) {
-            String name = entry.getKey();
-            String pattern = entry.getValue();
-            forbidCircularReferences(name, new ArrayList<>(), pattern);
-        }
-
-        String expression = toRegex(grokPattern);
+        String expression = toRegex(patternBank, grokPattern);
         byte[] expressionBytes = expression.getBytes(StandardCharsets.UTF_8);
-        this.compiledExpression = new Regex(expressionBytes, 0, expressionBytes.length, Option.DEFAULT, UTF8Encoding.INSTANCE,
-            message -> logCallBack.accept(message));
+        this.compiledExpression = new Regex(
+            expressionBytes,
+            0,
+            expressionBytes.length,
+            Option.DEFAULT,
+            UTF8Encoding.INSTANCE,
+            message -> logCallBack.accept(message)
+        );
 
-        List<GrokCaptureConfig> captureConfig = new ArrayList<>();
+        List<GrokCaptureConfig> grokCaptureConfigs = new ArrayList<>();
         for (Iterator<NameEntry> entry = compiledExpression.namedBackrefIterator(); entry.hasNext();) {
-            captureConfig.add(new GrokCaptureConfig(entry.next()));
+            grokCaptureConfigs.add(new GrokCaptureConfig(entry.next()));
         }
-        this.captureConfig = List.copyOf(captureConfig);
-    }
-
-    /**
-     * Checks whether patterns reference each other in a circular manner and if so fail with an exception
-     *
-     * In a pattern, anything between <code>%{</code> and <code>}</code> or <code>:</code> is considered
-     * a reference to another named pattern. This method will navigate to all these named patterns and
-     * check for a circular reference.
-     */
-    private void forbidCircularReferences(String patternName, List<String> path, String pattern) {
-        if (pattern.contains("%{" + patternName + "}") || pattern.contains("%{" + patternName + ":")) {
-            String message;
-            if (path.isEmpty()) {
-                message = "circular reference in pattern [" + patternName + "][" + pattern + "]";
-            } else {
-                message = "circular reference in pattern [" + path.remove(path.size() - 1) + "][" + pattern +
-                    "] back to pattern [" + patternName + "]";
-                // add rest of the path:
-                if (path.isEmpty() == false) {
-                    message += " via patterns [" + String.join("=>", path) + "]";
-                }
-            }
-            throw new IllegalArgumentException(message);
-        }
-
-        for (int i = pattern.indexOf("%{"); i != -1; i = pattern.indexOf("%{", i + 1)) {
-            int begin = i + 2;
-            int brackedIndex = pattern.indexOf('}', begin);
-            int columnIndex = pattern.indexOf(':', begin);
-            int end;
-            if (brackedIndex != -1 && columnIndex == -1) {
-                end = brackedIndex;
-            } else if (columnIndex != -1 && brackedIndex == -1) {
-                end = columnIndex;
-            } else if (brackedIndex != -1 && columnIndex != -1) {
-                end = Math.min(brackedIndex, columnIndex);
-            } else {
-                throw new IllegalArgumentException("pattern [" + pattern + "] has circular references to other pattern definitions");
-            }
-            String otherPatternName = pattern.substring(begin, end);
-            path.add(otherPatternName);
-            forbidCircularReferences(patternName, path, patternBank.get(otherPatternName));
-        }
+        this.captureConfig = List.copyOf(grokCaptureConfigs);
     }
 
     private String groupMatch(String name, Region region, String pattern) {
-        int number = GROK_PATTERN_REGEX.nameToBackrefNumber(name.getBytes(StandardCharsets.UTF_8), 0,
-            name.getBytes(StandardCharsets.UTF_8).length, region);
+        int number = GROK_PATTERN_REGEX.nameToBackrefNumber(
+            name.getBytes(StandardCharsets.UTF_8),
+            0,
+            name.getBytes(StandardCharsets.UTF_8).length,
+            region
+        );
         int begin = region.beg[number];
         int end = region.end[number];
         if (begin < 0) { // no match found
@@ -156,7 +116,7 @@ public final class Grok {
      *
      * @return named regex expression
      */
-    protected String toRegex(String grokPattern) {
+    protected String toRegex(PatternBank patternBank, String grokPattern) {
         StringBuilder res = new StringBuilder();
         for (int i = 0; i < MAX_TO_REGEX_ITERATIONS; i++) {
             byte[] grokPatternBytes = grokPattern.getBytes(StandardCharsets.UTF_8);
@@ -251,13 +211,14 @@ public final class Grok {
         int result;
         try {
             matcherWatchdog.register(matcher);
-            result = matcher.search(offset, length, Option.DEFAULT);
+            result = matcher.search(offset, offset + length, Option.DEFAULT);
         } finally {
             matcherWatchdog.unregister(matcher);
         }
         if (result == Matcher.INTERRUPTED) {
-            throw new RuntimeException("grok pattern matching was interrupted after [" +
-                matcherWatchdog.maxExecutionTimeInMillis() + "] ms");
+            throw new RuntimeException(
+                "grok pattern matching was interrupted after [" + matcherWatchdog.maxExecutionTimeInMillis() + "] ms"
+            );
         }
         if (result == Matcher.FAILED) {
             return false;
@@ -273,43 +234,8 @@ public final class Grok {
         return captureConfig;
     }
 
-    /**
-     * Load built-in patterns.
-     */
-    private static Map<String, String> loadBuiltinPatterns() {
-        String[] patternNames = new String[] {
-            "aws", "bacula", "bind", "bro", "exim", "firewalls", "grok-patterns", "haproxy",
-            "java", "junos", "linux-syslog", "maven", "mcollective-patterns", "mongodb", "nagios",
-            "postgresql", "rails", "redis", "ruby", "squid"
-        };
-        Map<String, String> builtinPatterns = new LinkedHashMap<>();
-        for (String pattern : patternNames) {
-            try {
-                try(InputStream is = Grok.class.getResourceAsStream("/patterns/" + pattern)) {
-                    loadPatterns(builtinPatterns, is);
-                }
-            } catch (IOException e) {
-                throw new RuntimeException("failed to load built-in patterns", e);
-            }
-        }
-        return Collections.unmodifiableMap(builtinPatterns);
-    }
-
-    private static void loadPatterns(Map<String, String> patternBank, InputStream inputStream) throws IOException {
-        String line;
-        BufferedReader br = new BufferedReader(new InputStreamReader(inputStream, StandardCharsets.UTF_8));
-        while ((line = br.readLine()) != null) {
-            String trimmedLine = line.replaceAll("^\\s+", "");
-            if (trimmedLine.startsWith("#") || trimmedLine.length() == 0) {
-                continue;
-            }
-
-            String[] parts = trimmedLine.split("\\s+", 2);
-            if (parts.length == 2) {
-                patternBank.put(parts[0], parts[1]);
-            }
-        }
+    public Regex getCompiledExpression() {
+        return compiledExpression;
     }
 
 }
-

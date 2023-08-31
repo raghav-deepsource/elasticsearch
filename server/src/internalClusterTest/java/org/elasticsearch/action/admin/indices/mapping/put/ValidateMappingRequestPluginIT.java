@@ -27,6 +27,7 @@ import static org.hamcrest.Matchers.equalTo;
 
 public class ValidateMappingRequestPluginIT extends ESSingleNodeTestCase {
     static final Map<String, Collection<String>> allowedOrigins = ConcurrentCollections.newConcurrentMap();
+
     public static class TestPlugin extends Plugin implements ActionPlugin {
         @Override
         public Collection<RequestValidators.RequestValidator<PutMappingRequest>> mappingRequestValidators() {
@@ -34,7 +35,8 @@ public class ValidateMappingRequestPluginIT extends ESSingleNodeTestCase {
                 for (Index index : indices) {
                     if (allowedOrigins.getOrDefault(index.getName(), Collections.emptySet()).contains(request.origin()) == false) {
                         return Optional.of(
-                                new IllegalStateException("not allowed: index[" + index.getName() + "] origin[" + request.origin() + "]"));
+                            new IllegalStateException("not allowed: index[" + index.getName() + "] origin[" + request.origin() + "]")
+                        );
                     }
                 }
                 return Optional.empty();
@@ -55,37 +57,38 @@ public class ValidateMappingRequestPluginIT extends ESSingleNodeTestCase {
         {
             String origin = randomFrom("", "3", "4", "5");
             PutMappingRequest request = new PutMappingRequest().indices("index_1").source("t1", "type=keyword").origin(origin);
-            Exception e = expectThrows(IllegalStateException.class, () -> client().admin().indices().putMapping(request).actionGet());
+            Exception e = expectThrows(IllegalStateException.class, () -> indicesAdmin().putMapping(request).actionGet());
             assertThat(e.getMessage(), equalTo("not allowed: index[index_1] origin[" + origin + "]"));
         }
         {
-            PutMappingRequest request = new PutMappingRequest().indices("index_1").origin(randomFrom("1", "2"))
+            PutMappingRequest request = new PutMappingRequest().indices("index_1")
+                .origin(randomFrom("1", "2"))
                 .source("t1", "type=keyword");
-            assertAcked(client().admin().indices().putMapping(request).actionGet());
+            assertAcked(indicesAdmin().putMapping(request).actionGet());
         }
 
         {
             String origin = randomFrom("", "1", "4", "5");
             PutMappingRequest request = new PutMappingRequest().indices("index_2").source("t2", "type=keyword").origin(origin);
-            Exception e = expectThrows(IllegalStateException.class, () -> client().admin().indices().putMapping(request).actionGet());
+            Exception e = expectThrows(IllegalStateException.class, () -> indicesAdmin().putMapping(request).actionGet());
             assertThat(e.getMessage(), equalTo("not allowed: index[index_2] origin[" + origin + "]"));
         }
         {
-            PutMappingRequest request = new PutMappingRequest().indices("index_2").origin(randomFrom("2", "3"))
+            PutMappingRequest request = new PutMappingRequest().indices("index_2")
+                .origin(randomFrom("2", "3"))
                 .source("t1", "type=keyword");
-            assertAcked(client().admin().indices().putMapping(request).actionGet());
+            assertAcked(indicesAdmin().putMapping(request).actionGet());
         }
 
         {
             String origin = randomFrom("", "1", "3", "4");
             PutMappingRequest request = new PutMappingRequest().indices("*").source("t3", "type=keyword").origin(origin);
-            Exception e = expectThrows(IllegalStateException.class, () -> client().admin().indices().putMapping(request).actionGet());
+            Exception e = expectThrows(IllegalStateException.class, () -> indicesAdmin().putMapping(request).actionGet());
             assertThat(e.getMessage(), containsString("not allowed:"));
         }
         {
-            PutMappingRequest request = new PutMappingRequest().indices("index_2").origin("2")
-                .source("t3", "type=keyword");
-            assertAcked(client().admin().indices().putMapping(request).actionGet());
+            PutMappingRequest request = new PutMappingRequest().indices("index_2").origin("2").source("t3", "type=keyword");
+            assertAcked(indicesAdmin().putMapping(request).actionGet());
         }
     }
 }

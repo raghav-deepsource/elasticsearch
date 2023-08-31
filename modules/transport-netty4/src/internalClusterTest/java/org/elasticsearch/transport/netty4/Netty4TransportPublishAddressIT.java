@@ -17,7 +17,6 @@ import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.transport.BoundTransportAddress;
 import org.elasticsearch.common.transport.TransportAddress;
 import org.elasticsearch.test.ESIntegTestCase;
-import org.elasticsearch.transport.Netty4Plugin;
 import org.elasticsearch.transport.TransportInfo;
 
 import java.net.Inet4Address;
@@ -33,9 +32,9 @@ import static org.hamcrest.Matchers.instanceOf;
 @ESIntegTestCase.ClusterScope(scope = ESIntegTestCase.Scope.TEST, numDataNodes = 0)
 public class Netty4TransportPublishAddressIT extends ESNetty4IntegTestCase {
     @Override
-    protected Settings nodeSettings(int nodeOrdinal) {
+    protected Settings nodeSettings(int nodeOrdinal, Settings otherSettings) {
         return Settings.builder()
-            .put(super.nodeSettings(nodeOrdinal))
+            .put(super.nodeSettings(nodeOrdinal, otherSettings))
             .put(NetworkModule.TRANSPORT_TYPE_KEY, Netty4Plugin.NETTY_TRANSPORT_NAME)
             .build();
     }
@@ -56,7 +55,7 @@ public class Netty4TransportPublishAddressIT extends ESNetty4IntegTestCase {
         ensureStableCluster(2); // fails if port of publish address does not match corresponding bound address
 
         logger.info("--> checking if boundAddress matching publishAddress has same port");
-        NodesInfoResponse nodesInfoResponse = client().admin().cluster().prepareNodesInfo().get();
+        NodesInfoResponse nodesInfoResponse = clusterAdmin().prepareNodesInfo().get();
         for (NodeInfo nodeInfo : nodesInfoResponse.getNodes()) {
             BoundTransportAddress boundTransportAddress = nodeInfo.getInfo(TransportInfo.class).getAddress();
             if (nodeInfo.getNode().getName().equals(ipv4OnlyNode)) {

@@ -6,19 +6,20 @@
  */
 package org.elasticsearch.xpack.spatial.action;
 
-import org.elasticsearch.Version;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.support.ActionFilters;
 import org.elasticsearch.action.support.PlainActionFuture;
-import org.elasticsearch.client.Client;
+import org.elasticsearch.client.internal.Client;
 import org.elasticsearch.cluster.ClusterName;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.metadata.Metadata;
 import org.elasticsearch.cluster.node.DiscoveryNode;
+import org.elasticsearch.cluster.node.DiscoveryNodeUtils;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.io.stream.BytesStreamOutput;
 import org.elasticsearch.tasks.Task;
 import org.elasticsearch.test.ESTestCase;
+import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.TransportService;
 import org.elasticsearch.xpack.core.XPackFeatureSet;
 import org.elasticsearch.xpack.core.action.XPackUsageFeatureResponse;
@@ -30,8 +31,8 @@ import org.mockito.stubbing.Answer;
 import java.util.Collections;
 
 import static org.hamcrest.core.Is.is;
-import static org.mockito.Matchers.any;
-import static org.mockito.Matchers.eq;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -44,7 +45,7 @@ public class SpatialInfoTransportActionTests extends ESTestCase {
     public void init() {
         clusterService = mock(ClusterService.class);
 
-        DiscoveryNode discoveryNode = new DiscoveryNode("nodeId", buildNewFakeTransportAddress(), Version.CURRENT);
+        DiscoveryNode discoveryNode = DiscoveryNodeUtils.create("nodeId");
         when(clusterService.localNode()).thenReturn(discoveryNode);
         ClusterName clusterName = new ClusterName("cluster_name");
         when(clusterService.getClusterName()).thenReturn(clusterName);
@@ -55,12 +56,17 @@ public class SpatialInfoTransportActionTests extends ESTestCase {
     }
 
     public void testAvailable() throws Exception {
-        SpatialInfoTransportAction featureSet = new SpatialInfoTransportAction(
-            mock(TransportService.class), mock(ActionFilters.class));
+        SpatialInfoTransportAction featureSet = new SpatialInfoTransportAction(mock(TransportService.class), mock(ActionFilters.class));
         assertThat(featureSet.available(), is(true));
 
-        var usageAction = new SpatialUsageTransportAction(mock(TransportService.class), clusterService, null,
-            mock(ActionFilters.class), null, mockClient());
+        var usageAction = new SpatialUsageTransportAction(
+            mock(TransportService.class),
+            clusterService,
+            mock(ThreadPool.class),
+            mock(ActionFilters.class),
+            null,
+            mockClient()
+        );
         PlainActionFuture<XPackUsageFeatureResponse> future = new PlainActionFuture<>();
         Task task = new Task(1L, "_type", "_action", "_description", null, Collections.emptyMap());
         usageAction.masterOperation(task, null, clusterService.state(), future);
@@ -74,13 +80,18 @@ public class SpatialInfoTransportActionTests extends ESTestCase {
     }
 
     public void testEnabled() throws Exception {
-        SpatialInfoTransportAction featureSet = new SpatialInfoTransportAction(
-            mock(TransportService.class), mock(ActionFilters.class));
+        SpatialInfoTransportAction featureSet = new SpatialInfoTransportAction(mock(TransportService.class), mock(ActionFilters.class));
         assertThat(featureSet.enabled(), is(true));
         assertTrue(featureSet.enabled());
 
-        SpatialUsageTransportAction usageAction = new SpatialUsageTransportAction(mock(TransportService.class),
-            clusterService, null, mock(ActionFilters.class), null, mockClient());
+        SpatialUsageTransportAction usageAction = new SpatialUsageTransportAction(
+            mock(TransportService.class),
+            clusterService,
+            mock(ThreadPool.class),
+            mock(ActionFilters.class),
+            null,
+            mockClient()
+        );
         PlainActionFuture<XPackUsageFeatureResponse> future = new PlainActionFuture<>();
         usageAction.masterOperation(mock(Task.class), null, clusterService.state(), future);
         XPackFeatureSet.Usage usage = future.get().getUsage();
@@ -96,10 +107,11 @@ public class SpatialInfoTransportActionTests extends ESTestCase {
         Client client = mock(Client.class);
         doAnswer((Answer<Void>) invocation -> {
             @SuppressWarnings("unchecked")
-            ActionListener<SpatialStatsAction.Response> listener =
-                (ActionListener<SpatialStatsAction.Response>) invocation.getArguments()[2];
-            listener.onResponse(new SpatialStatsAction.Response(clusterService.getClusterName(),
-                Collections.emptyList(), Collections.emptyList()));
+            ActionListener<SpatialStatsAction.Response> listener = (ActionListener<SpatialStatsAction.Response>) invocation
+                .getArguments()[2];
+            listener.onResponse(
+                new SpatialStatsAction.Response(clusterService.getClusterName(), Collections.emptyList(), Collections.emptyList())
+            );
             return null;
         }).when(client).execute(eq(SpatialStatsAction.INSTANCE), any(), any());
         return client;

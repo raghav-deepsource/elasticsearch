@@ -8,6 +8,7 @@
 
 package org.elasticsearch.search.fetch;
 
+import org.elasticsearch.TransportVersion;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.search.SearchHit;
@@ -15,7 +16,7 @@ import org.elasticsearch.search.SearchHits;
 import org.elasticsearch.search.SearchPhaseResult;
 import org.elasticsearch.search.SearchShardTarget;
 import org.elasticsearch.search.internal.ShardSearchContextId;
-import org.elasticsearch.search.query.QuerySearchResult;
+import org.elasticsearch.search.profile.ProfileResult;
 
 import java.io.IOException;
 
@@ -25,23 +26,33 @@ public final class FetchSearchResult extends SearchPhaseResult {
     // client side counter
     private transient int counter;
 
-    public FetchSearchResult() {
-    }
+    private ProfileResult profileResult;
 
-    public FetchSearchResult(StreamInput in) throws IOException {
-        super(in);
-        contextId = new ShardSearchContextId(in);
-        hits = new SearchHits(in);
-    }
+    public FetchSearchResult() {}
 
     public FetchSearchResult(ShardSearchContextId id, SearchShardTarget shardTarget) {
         this.contextId = id;
         setSearchShardTarget(shardTarget);
     }
 
+    public FetchSearchResult(StreamInput in) throws IOException {
+        super(in);
+        contextId = new ShardSearchContextId(in);
+        hits = new SearchHits(in);
+        if (in.getTransportVersion().onOrAfter(TransportVersion.V_7_16_0)) {
+            profileResult = in.readOptionalWriteable(ProfileResult::new);
+        } else {
+            profileResult = null;
+        }
+    }
+
     @Override
-    public QuerySearchResult queryResult() {
-        return null;
+    public void writeTo(StreamOutput out) throws IOException {
+        contextId.writeTo(out);
+        hits.writeTo(out);
+        if (out.getTransportVersion().onOrAfter(TransportVersion.V_7_16_0)) {
+            out.writeOptionalWriteable(profileResult);
+        }
     }
 
     @Override
@@ -49,12 +60,14 @@ public final class FetchSearchResult extends SearchPhaseResult {
         return this;
     }
 
-    public void hits(SearchHits hits) {
+    public void shardResult(SearchHits hits, ProfileResult profileResult) {
         assert assertNoSearchTarget(hits);
         this.hits = hits;
+        assert this.profileResult == null;
+        this.profileResult = profileResult;
     }
 
-    private boolean assertNoSearchTarget(SearchHits hits) {
+    private static boolean assertNoSearchTarget(SearchHits hits) {
         for (SearchHit hit : hits.getHits()) {
             assert hit.getShard() == null : "expected null but got: " + hit.getShard();
         }
@@ -74,9 +87,7 @@ public final class FetchSearchResult extends SearchPhaseResult {
         return counter++;
     }
 
-    @Override
-    public void writeTo(StreamOutput out) throws IOException {
-        contextId.writeTo(out);
-        hits.writeTo(out);
+    public ProfileResult profileResult() {
+        return profileResult;
     }
 }

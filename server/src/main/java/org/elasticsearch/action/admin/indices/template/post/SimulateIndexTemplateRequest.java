@@ -8,13 +8,14 @@
 
 package org.elasticsearch.action.admin.indices.template.post;
 
+import org.elasticsearch.TransportVersion;
 import org.elasticsearch.action.ActionRequestValidationException;
 import org.elasticsearch.action.admin.indices.template.put.PutComposableIndexTemplateAction;
 import org.elasticsearch.action.support.master.MasterNodeReadRequest;
-import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
+import org.elasticsearch.core.Nullable;
 
 import java.io.IOException;
 import java.util.Objects;
@@ -25,6 +26,8 @@ public class SimulateIndexTemplateRequest extends MasterNodeReadRequest<Simulate
 
     @Nullable
     private PutComposableIndexTemplateAction.Request indexTemplateRequest;
+
+    private boolean includeDefaults = false;
 
     public SimulateIndexTemplateRequest(String indexName) {
         if (Strings.isNullOrEmpty(indexName)) {
@@ -37,6 +40,9 @@ public class SimulateIndexTemplateRequest extends MasterNodeReadRequest<Simulate
         super(in);
         indexName = in.readString();
         indexTemplateRequest = in.readOptionalWriteable(PutComposableIndexTemplateAction.Request::new);
+        if (in.getTransportVersion().onOrAfter(TransportVersion.V_8_500_010)) {
+            includeDefaults = in.readBoolean();
+        }
     }
 
     @Override
@@ -44,6 +50,9 @@ public class SimulateIndexTemplateRequest extends MasterNodeReadRequest<Simulate
         super.writeTo(out);
         out.writeString(indexName);
         out.writeOptionalWriteable(indexTemplateRequest);
+        if (out.getTransportVersion().onOrAfter(TransportVersion.V_8_500_010)) {
+            out.writeBoolean(includeDefaults);
+        }
     }
 
     @Override
@@ -57,6 +66,10 @@ public class SimulateIndexTemplateRequest extends MasterNodeReadRequest<Simulate
 
     public String getIndexName() {
         return indexName;
+    }
+
+    public boolean includeDefaults() {
+        return includeDefaults;
     }
 
     @Nullable
@@ -74,6 +87,11 @@ public class SimulateIndexTemplateRequest extends MasterNodeReadRequest<Simulate
         return this;
     }
 
+    public SimulateIndexTemplateRequest includeDefaults(boolean includeDefaults) {
+        this.includeDefaults = includeDefaults;
+        return this;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -83,12 +101,13 @@ public class SimulateIndexTemplateRequest extends MasterNodeReadRequest<Simulate
             return false;
         }
         SimulateIndexTemplateRequest that = (SimulateIndexTemplateRequest) o;
-        return indexName.equals(that.indexName) &&
-            Objects.equals(indexTemplateRequest, that.indexTemplateRequest);
+        return indexName.equals(that.indexName)
+            && Objects.equals(indexTemplateRequest, that.indexTemplateRequest)
+            && includeDefaults == that.includeDefaults;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(indexName, indexTemplateRequest);
+        return Objects.hash(indexName, indexTemplateRequest, includeDefaults);
     }
 }

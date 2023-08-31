@@ -14,12 +14,19 @@ import org.elasticsearch.search.DocValueFormat;
 import java.io.IOException;
 import java.util.Iterator;
 import java.util.Map;
+import java.util.Objects;
 
 public class InternalHDRPercentiles extends AbstractInternalHDRPercentiles implements Percentiles {
     public static final String NAME = "hdr_percentiles";
 
-    public InternalHDRPercentiles(String name, double[] percents, DoubleHistogram state, boolean keyed, DocValueFormat formatter,
-                                  Map<String, Object> metadata) {
+    public InternalHDRPercentiles(
+        String name,
+        double[] percents,
+        DoubleHistogram state,
+        boolean keyed,
+        DocValueFormat formatter,
+        Map<String, Object> metadata
+    ) {
         super(name, percents, state, keyed, formatter, metadata);
     }
 
@@ -35,14 +42,27 @@ public class InternalHDRPercentiles extends AbstractInternalHDRPercentiles imple
         return NAME;
     }
 
+    public static InternalHDRPercentiles empty(
+        String name,
+        double[] keys,
+        boolean keyed,
+        DocValueFormat format,
+        Map<String, Object> metadata
+    ) {
+        return new InternalHDRPercentiles(name, keys, null, keyed, format, metadata);
+    }
+
     @Override
     public Iterator<Percentile> iterator() {
+        if (state == null) {
+            return EMPTY_ITERATOR;
+        }
         return new Iter(keys, state);
     }
 
     @Override
     public double percentile(double percent) {
-        if (state.getTotalCount() == 0) {
+        if (state == null || state.getTotalCount() == 0) {
             return Double.NaN;
         }
         return state.getValueAtPercentile(percent);
@@ -59,8 +79,13 @@ public class InternalHDRPercentiles extends AbstractInternalHDRPercentiles imple
     }
 
     @Override
-    protected AbstractInternalHDRPercentiles createReduced(String name, double[] keys, DoubleHistogram merged, boolean keyed,
-            Map<String, Object> metadata) {
+    protected AbstractInternalHDRPercentiles createReduced(
+        String name,
+        double[] keys,
+        DoubleHistogram merged,
+        boolean keyed,
+        Map<String, Object> metadata
+    ) {
         return new InternalHDRPercentiles(name, keys, merged, keyed, format, metadata);
     }
 
@@ -72,7 +97,7 @@ public class InternalHDRPercentiles extends AbstractInternalHDRPercentiles imple
 
         public Iter(double[] percents, DoubleHistogram state) {
             this.percents = percents;
-            this.state = state;
+            this.state = Objects.requireNonNull(state);
             i = 0;
         }
 

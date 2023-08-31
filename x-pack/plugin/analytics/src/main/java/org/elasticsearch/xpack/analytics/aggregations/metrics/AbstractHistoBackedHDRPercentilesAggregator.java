@@ -8,31 +8,28 @@
 package org.elasticsearch.xpack.analytics.aggregations.metrics;
 
 import org.HdrHistogram.DoubleHistogram;
-import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.search.ScoreMode;
-import org.elasticsearch.common.lease.Releasables;
-import org.elasticsearch.common.util.ArrayUtils;
 import org.elasticsearch.common.util.BigArrays;
 import org.elasticsearch.common.util.ObjectArray;
+import org.elasticsearch.core.Releasables;
 import org.elasticsearch.index.fielddata.HistogramValue;
 import org.elasticsearch.index.fielddata.HistogramValues;
 import org.elasticsearch.search.DocValueFormat;
+import org.elasticsearch.search.aggregations.AggregationExecutionContext;
 import org.elasticsearch.search.aggregations.Aggregator;
 import org.elasticsearch.search.aggregations.LeafBucketCollector;
 import org.elasticsearch.search.aggregations.LeafBucketCollectorBase;
 import org.elasticsearch.search.aggregations.metrics.NumericMetricsAggregator;
+import org.elasticsearch.search.aggregations.metrics.PercentilesConfig;
 import org.elasticsearch.search.aggregations.support.AggregationContext;
 import org.elasticsearch.search.aggregations.support.ValuesSource;
+import org.elasticsearch.search.aggregations.support.ValuesSourceConfig;
 import org.elasticsearch.xpack.analytics.aggregations.support.HistogramValuesSource;
 
 import java.io.IOException;
 import java.util.Map;
 
 abstract class AbstractHistoBackedHDRPercentilesAggregator extends NumericMetricsAggregator.MultiValue {
-
-    private static int indexOfKey(double[] keys, double key) {
-        return ArrayUtils.binarySearch(keys, key, 0.001);
-    }
 
     protected final double[] keys;
     protected final ValuesSource valuesSource;
@@ -41,11 +38,20 @@ abstract class AbstractHistoBackedHDRPercentilesAggregator extends NumericMetric
     protected final int numberOfSignificantValueDigits;
     protected final boolean keyed;
 
-    AbstractHistoBackedHDRPercentilesAggregator(String name, ValuesSource valuesSource, AggregationContext context, Aggregator parent,
-                                     double[] keys, int numberOfSignificantValueDigits, boolean keyed, DocValueFormat formatter,
-                                     Map<String, Object> metadata) throws IOException {
+    AbstractHistoBackedHDRPercentilesAggregator(
+        String name,
+        ValuesSourceConfig config,
+        AggregationContext context,
+        Aggregator parent,
+        double[] keys,
+        int numberOfSignificantValueDigits,
+        boolean keyed,
+        DocValueFormat formatter,
+        Map<String, Object> metadata
+    ) throws IOException {
         super(name, context, parent, metadata);
-        this.valuesSource = valuesSource;
+        assert config.hasValues();
+        this.valuesSource = config.getValuesSource();
         this.keyed = keyed;
         this.format = formatter;
         this.states = context.bigArrays().newObjectArray(1);
@@ -55,16 +61,12 @@ abstract class AbstractHistoBackedHDRPercentilesAggregator extends NumericMetric
 
     @Override
     public ScoreMode scoreMode() {
-        return valuesSource != null && valuesSource.needsScores() ? ScoreMode.COMPLETE : ScoreMode.COMPLETE_NO_SCORES;
+        return valuesSource.needsScores() ? ScoreMode.COMPLETE : ScoreMode.COMPLETE_NO_SCORES;
     }
 
     @Override
-    public LeafBucketCollector getLeafCollector(LeafReaderContext ctx,
-                                                final LeafBucketCollector sub) throws IOException {
-        if (valuesSource == null) {
-            return LeafBucketCollector.NO_OP_COLLECTOR;
-        }
-        final HistogramValues values = ((HistogramValuesSource.Histogram)valuesSource).getHistogramValues(ctx);
+    public LeafBucketCollector getLeafCollector(AggregationExecutionContext aggCtx, final LeafBucketCollector sub) throws IOException {
+        final HistogramValues values = ((HistogramValuesSource.Histogram) valuesSource).getHistogramValues(aggCtx.getLeafReaderContext());
 
         return new LeafBucketCollectorBase(sub, values) {
             @Override
@@ -100,7 +102,7 @@ abstract class AbstractHistoBackedHDRPercentilesAggregator extends NumericMetric
 
     @Override
     public boolean hasMetric(String name) {
-        return indexOfKey(keys, Double.parseDouble(name)) >= 0;
+        return PercentilesConfig.indexOfKey(keys, Double.parseDouble(name)) >= 0;
     }
 
     protected DoubleHistogram getState(long bucketOrd) {

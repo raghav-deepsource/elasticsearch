@@ -12,11 +12,12 @@ import org.elasticsearch.ResourceNotFoundException;
 import org.elasticsearch.action.DocWriteRequest.OpType;
 import org.elasticsearch.action.bulk.BulkItemResponse;
 import org.elasticsearch.common.util.concurrent.EsRejectedExecutionException;
-import org.elasticsearch.index.mapper.MapperParsingException;
+import org.elasticsearch.index.mapper.DocumentParsingException;
 import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.index.translog.TranslogException;
 import org.elasticsearch.rest.RestStatus;
 import org.elasticsearch.test.ESTestCase;
+import org.elasticsearch.xcontent.XContentLocation;
 
 import java.util.Collection;
 import java.util.HashMap;
@@ -24,23 +25,27 @@ import java.util.Map;
 
 public class ExceptionRootCauseFinderTests extends ESTestCase {
 
-    public void testFetFirstIrrecoverableExceptionFromBulkResponses() {
+    public void testGetFirstIrrecoverableExceptionFromBulkResponses() {
         Map<Integer, BulkItemResponse> bulkItemResponses = new HashMap<>();
 
         int id = 1;
         // 1
         bulkItemResponses.put(
             id,
-            new BulkItemResponse(
+            BulkItemResponse.failure(
                 id++,
                 OpType.INDEX,
-                new BulkItemResponse.Failure("the_index", "id", new MapperParsingException("mapper parsing error"))
+                new BulkItemResponse.Failure(
+                    "the_index",
+                    "id",
+                    new DocumentParsingException(XContentLocation.UNKNOWN, "document parsing error")
+                )
             )
         );
         // 2
         bulkItemResponses.put(
             id,
-            new BulkItemResponse(
+            BulkItemResponse.failure(
                 id++,
                 OpType.INDEX,
                 new BulkItemResponse.Failure("the_index", "id", new ResourceNotFoundException("resource not found error"))
@@ -49,7 +54,7 @@ public class ExceptionRootCauseFinderTests extends ESTestCase {
         // 3
         bulkItemResponses.put(
             id,
-            new BulkItemResponse(
+            BulkItemResponse.failure(
                 id++,
                 OpType.INDEX,
                 new BulkItemResponse.Failure("the_index", "id", new IllegalArgumentException("illegal argument error"))
@@ -58,7 +63,7 @@ public class ExceptionRootCauseFinderTests extends ESTestCase {
         // 4 not irrecoverable
         bulkItemResponses.put(
             id,
-            new BulkItemResponse(
+            BulkItemResponse.failure(
                 id++,
                 OpType.INDEX,
                 new BulkItemResponse.Failure("the_index", "id", new EsRejectedExecutionException("es rejected execution"))
@@ -67,7 +72,7 @@ public class ExceptionRootCauseFinderTests extends ESTestCase {
         // 5 not irrecoverable
         bulkItemResponses.put(
             id,
-            new BulkItemResponse(
+            BulkItemResponse.failure(
                 id++,
                 OpType.INDEX,
                 new BulkItemResponse.Failure("the_index", "id", new TranslogException(new ShardId("the_index", "uid", 0), "translog error"))
@@ -76,7 +81,7 @@ public class ExceptionRootCauseFinderTests extends ESTestCase {
         // 6
         bulkItemResponses.put(
             id,
-            new BulkItemResponse(
+            BulkItemResponse.failure(
                 id++,
                 OpType.INDEX,
                 new BulkItemResponse.Failure(
@@ -89,7 +94,7 @@ public class ExceptionRootCauseFinderTests extends ESTestCase {
         // 7
         bulkItemResponses.put(
             id,
-            new BulkItemResponse(
+            BulkItemResponse.failure(
                 id++,
                 OpType.INDEX,
                 new BulkItemResponse.Failure(
@@ -102,7 +107,7 @@ public class ExceptionRootCauseFinderTests extends ESTestCase {
         // 8 not irrecoverable
         bulkItemResponses.put(
             id,
-            new BulkItemResponse(
+            BulkItemResponse.failure(
                 id++,
                 OpType.INDEX,
                 new BulkItemResponse.Failure(
@@ -115,7 +120,7 @@ public class ExceptionRootCauseFinderTests extends ESTestCase {
         // 9 not irrecoverable
         bulkItemResponses.put(
             id,
-            new BulkItemResponse(
+            BulkItemResponse.failure(
                 id++,
                 OpType.INDEX,
                 new BulkItemResponse.Failure(
@@ -126,7 +131,7 @@ public class ExceptionRootCauseFinderTests extends ESTestCase {
             )
         );
 
-        assertFirstException(bulkItemResponses.values(), MapperParsingException.class, "mapper parsing error");
+        assertFirstException(bulkItemResponses.values(), DocumentParsingException.class, "document parsing error");
         bulkItemResponses.remove(1);
         assertFirstException(bulkItemResponses.values(), ResourceNotFoundException.class, "resource not found error");
         bulkItemResponses.remove(2);

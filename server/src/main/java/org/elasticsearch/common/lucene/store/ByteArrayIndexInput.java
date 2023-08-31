@@ -8,6 +8,8 @@
 package org.elasticsearch.common.lucene.store;
 
 import org.apache.lucene.store.IndexInput;
+import org.apache.lucene.util.BitUtil;
+import org.elasticsearch.common.Strings;
 
 import java.io.EOFException;
 import java.io.IOException;
@@ -20,9 +22,9 @@ public class ByteArrayIndexInput extends IndexInput {
 
     private int pos;
 
-    private int offset;
+    private final int offset;
 
-    private int length;
+    private final int length;
 
     public ByteArrayIndexInput(String resourceDesc, byte[] bytes) {
         this(resourceDesc, bytes, 0, bytes.length);
@@ -36,8 +38,7 @@ public class ByteArrayIndexInput extends IndexInput {
     }
 
     @Override
-    public void close() throws IOException {
-    }
+    public void close() throws IOException {}
 
     @Override
     public long getFilePointer() {
@@ -51,7 +52,7 @@ public class ByteArrayIndexInput extends IndexInput {
         } else if (l > length) {
             throw new EOFException("seek past EOF");
         }
-        pos = (int)l;
+        pos = (int) l;
     }
 
     @Override
@@ -62,10 +63,18 @@ public class ByteArrayIndexInput extends IndexInput {
     @Override
     public IndexInput slice(String sliceDescription, long offset, long length) throws IOException {
         if (offset >= 0L && length >= 0L && offset + length <= this.length) {
-            return new ByteArrayIndexInput(sliceDescription, bytes, this.offset + (int)offset, (int)length);
+            return new ByteArrayIndexInput(sliceDescription, bytes, this.offset + (int) offset, (int) length);
         } else {
-            throw new IllegalArgumentException("slice() " + sliceDescription + " out of bounds: offset=" + offset
-                    + ",length=" + length + ",fileLength=" + this.length + ": " + this);
+            throw new IllegalArgumentException(
+                Strings.format(
+                    "slice() %s out of bounds: offset=%d,length=%d,fileLength=%d: %s",
+                    sliceDescription,
+                    offset,
+                    length,
+                    this.length,
+                    this
+                )
+            );
         }
     }
 
@@ -84,5 +93,32 @@ public class ByteArrayIndexInput extends IndexInput {
         }
         System.arraycopy(bytes, this.offset + pos, b, offset, len);
         pos += len;
+    }
+
+    @Override
+    public short readShort() throws IOException {
+        try {
+            return (short) BitUtil.VH_LE_SHORT.get(bytes, pos + offset);
+        } finally {
+            pos += Short.BYTES;
+        }
+    }
+
+    @Override
+    public int readInt() throws IOException {
+        try {
+            return (int) BitUtil.VH_LE_INT.get(bytes, pos + offset);
+        } finally {
+            pos += Integer.BYTES;
+        }
+    }
+
+    @Override
+    public long readLong() throws IOException {
+        try {
+            return (long) BitUtil.VH_LE_LONG.get(bytes, pos + offset);
+        } finally {
+            pos += Long.BYTES;
+        }
     }
 }

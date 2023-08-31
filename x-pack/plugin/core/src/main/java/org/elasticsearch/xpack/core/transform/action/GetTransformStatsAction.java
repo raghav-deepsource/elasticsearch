@@ -8,7 +8,6 @@
 package org.elasticsearch.xpack.core.transform.action;
 
 import org.elasticsearch.ElasticsearchException;
-import org.elasticsearch.Version;
 import org.elasticsearch.action.ActionRequestValidationException;
 import org.elasticsearch.action.ActionType;
 import org.elasticsearch.action.TaskOperationFailure;
@@ -18,9 +17,14 @@ import org.elasticsearch.cluster.metadata.Metadata;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
-import org.elasticsearch.common.xcontent.ToXContentObject;
-import org.elasticsearch.common.xcontent.XContentBuilder;
+import org.elasticsearch.core.Nullable;
+import org.elasticsearch.core.TimeValue;
+import org.elasticsearch.tasks.CancellableTask;
 import org.elasticsearch.tasks.Task;
+import org.elasticsearch.tasks.TaskId;
+import org.elasticsearch.xcontent.ParseField;
+import org.elasticsearch.xcontent.ToXContentObject;
+import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xpack.core.action.util.PageParams;
 import org.elasticsearch.xpack.core.action.util.QueryPage;
 import org.elasticsearch.xpack.core.transform.TransformField;
@@ -30,9 +34,11 @@ import org.elasticsearch.xpack.core.transform.utils.ExceptionsHelper;
 import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 import static org.elasticsearch.action.ValidateActions.addValidationError;
+import static org.elasticsearch.core.Strings.format;
 
 public class GetTransformStatsAction extends ActionType<GetTransformStatsAction.Response> {
 
@@ -52,23 +58,22 @@ public class GetTransformStatsAction extends ActionType<GetTransformStatsAction.
         // used internally to expand the queried id expression
         private List<String> expandedIds;
 
-        public Request(String id) {
+        public Request(String id, @Nullable TimeValue timeout) {
+            setTimeout(timeout);
             if (Strings.isNullOrEmpty(id) || id.equals("*")) {
                 this.id = Metadata.ALL;
             } else {
                 this.id = id;
             }
-            this.expandedIds = Collections.singletonList(id);
+            this.expandedIds = Collections.singletonList(this.id);
         }
 
         public Request(StreamInput in) throws IOException {
             super(in);
             id = in.readString();
-            expandedIds = Collections.unmodifiableList(in.readStringList());
+            expandedIds = in.readImmutableList(StreamInput::readString);
             pageParams = new PageParams(in);
-            if (in.getVersion().onOrAfter(Version.V_7_3_0)) {
-                allowNoMatch = in.readBoolean();
-            }
+            allowNoMatch = in.readBoolean();
         }
 
         @Override
@@ -112,9 +117,7 @@ public class GetTransformStatsAction extends ActionType<GetTransformStatsAction.
             out.writeString(id);
             out.writeStringCollection(expandedIds);
             pageParams.writeTo(out);
-            if (out.getVersion().onOrAfter(Version.V_7_3_0)) {
-                out.writeBoolean(allowNoMatch);
-            }
+            out.writeBoolean(allowNoMatch);
         }
 
         @Override
@@ -145,13 +148,18 @@ public class GetTransformStatsAction extends ActionType<GetTransformStatsAction.
             Request other = (Request) obj;
             return Objects.equals(id, other.id) && Objects.equals(pageParams, other.pageParams) && allowNoMatch == other.allowNoMatch;
         }
+
+        @Override
+        public Task createTask(long id, String type, String action, TaskId parentTaskId, Map<String, String> headers) {
+            return new CancellableTask(id, type, action, format("get_transform_stats[%s]", this.id), parentTaskId, headers);
+        }
     }
 
     public static class Response extends BaseTasksResponse implements ToXContentObject {
         private final QueryPage<TransformStats> transformsStats;
 
-        public Response(List<TransformStats> transformStateAndStats, long count) {
-            this(new QueryPage<>(transformStateAndStats, count, TransformField.TRANSFORMS));
+        public Response(List<TransformStats> transformStateAndStats) {
+            this(new QueryPage<>(transformStateAndStats, transformStateAndStats.size(), TransformField.TRANSFORMS));
         }
 
         public Response(
@@ -163,7 +171,7 @@ public class GetTransformStatsAction extends ActionType<GetTransformStatsAction.
             this(new QueryPage<>(transformStateAndStats, count, TransformField.TRANSFORMS), taskFailures, nodeFailures);
         }
 
-        private Response(QueryPage<TransformStats> transformsStats) {
+        public Response(QueryPage<TransformStats> transformsStats) {
             this(transformsStats, Collections.emptyList(), Collections.emptyList());
         }
 
@@ -178,12 +186,7 @@ public class GetTransformStatsAction extends ActionType<GetTransformStatsAction.
 
         public Response(StreamInput in) throws IOException {
             super(in);
-            if (in.getVersion().onOrAfter(Version.V_7_3_0)) {
-                transformsStats = new QueryPage<>(in, TransformStats::new);
-            } else {
-                List<TransformStats> stats = in.readList(TransformStats::new);
-                transformsStats = new QueryPage<>(stats, stats.size(), TransformField.TRANSFORMS);
-            }
+            transformsStats = new QueryPage<>(in, TransformStats::new);
         }
 
         public List<TransformStats> getTransformsStats() {
@@ -194,14 +197,14 @@ public class GetTransformStatsAction extends ActionType<GetTransformStatsAction.
             return transformsStats.count();
         }
 
+        public ParseField getResultsField() {
+            return transformsStats.getResultsField();
+        }
+
         @Override
         public void writeTo(StreamOutput out) throws IOException {
             super.writeTo(out);
-            if (out.getVersion().onOrAfter(Version.V_7_3_0)) {
-                transformsStats.writeTo(out);
-            } else {
-                out.writeList(transformsStats.results());
-            }
+            transformsStats.writeTo(out);
         }
 
         @Override

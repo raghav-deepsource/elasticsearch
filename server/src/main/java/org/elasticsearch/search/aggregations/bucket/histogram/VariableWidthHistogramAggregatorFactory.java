@@ -14,11 +14,13 @@ import org.elasticsearch.search.aggregations.AggregatorFactory;
 import org.elasticsearch.search.aggregations.CardinalityUpperBound;
 import org.elasticsearch.search.aggregations.support.AggregationContext;
 import org.elasticsearch.search.aggregations.support.CoreValuesSourceType;
+import org.elasticsearch.search.aggregations.support.TimeSeriesValuesSourceType;
 import org.elasticsearch.search.aggregations.support.ValuesSourceAggregatorFactory;
 import org.elasticsearch.search.aggregations.support.ValuesSourceConfig;
 import org.elasticsearch.search.aggregations.support.ValuesSourceRegistry;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Map;
 
 public class VariableWidthHistogramAggregatorFactory extends ValuesSourceAggregatorFactory {
@@ -26,9 +28,10 @@ public class VariableWidthHistogramAggregatorFactory extends ValuesSourceAggrega
     public static void registerAggregators(ValuesSourceRegistry.Builder builder) {
         builder.register(
             VariableWidthHistogramAggregationBuilder.REGISTRY_KEY,
-            CoreValuesSourceType.NUMERIC,
+            List.of(CoreValuesSourceType.NUMERIC, TimeSeriesValuesSourceType.COUNTER),
             VariableWidthHistogramAggregator::new,
-                true);
+            true
+        );
     }
 
     private final VariableWidthHistogramAggregatorSupplier aggregatorSupplier;
@@ -36,16 +39,18 @@ public class VariableWidthHistogramAggregatorFactory extends ValuesSourceAggrega
     private final int shardSize;
     private final int initialBuffer;
 
-    VariableWidthHistogramAggregatorFactory(String name,
-                                            ValuesSourceConfig config,
-                                            int numBuckets,
-                                            int shardSize,
-                                            int initialBuffer,
-                                            AggregationContext context,
-                                            AggregatorFactory parent,
-                                            AggregatorFactories.Builder subFactoriesBuilder,
-                                            Map<String, Object> metadata,
-                                            VariableWidthHistogramAggregatorSupplier aggregatorSupplier) throws IOException{
+    VariableWidthHistogramAggregatorFactory(
+        String name,
+        ValuesSourceConfig config,
+        int numBuckets,
+        int shardSize,
+        int initialBuffer,
+        AggregationContext context,
+        AggregatorFactory parent,
+        AggregatorFactories.Builder subFactoriesBuilder,
+        Map<String, Object> metadata,
+        VariableWidthHistogramAggregatorSupplier aggregatorSupplier
+    ) throws IOException {
         super(name, config, context, parent, subFactoriesBuilder, metadata);
         this.aggregatorSupplier = aggregatorSupplier;
         this.numBuckets = numBuckets;
@@ -63,13 +68,21 @@ public class VariableWidthHistogramAggregatorFactory extends ValuesSourceAggrega
                     + "] cannot be nested inside an aggregation that collects more than a single bucket."
             );
         }
-        return aggregatorSupplier
-            .build(name, factories, numBuckets, shardSize, initialBuffer, config, context, parent, metadata);
+        return aggregatorSupplier.build(name, factories, numBuckets, shardSize, initialBuffer, config, context, parent, metadata);
     }
 
     @Override
     protected Aggregator createUnmapped(Aggregator parent, Map<String, Object> metadata) throws IOException {
-        return new VariableWidthHistogramAggregator(name, factories, numBuckets, shardSize, initialBuffer, config,
-            context, parent, metadata);
+        return new VariableWidthHistogramAggregator(
+            name,
+            factories,
+            numBuckets,
+            shardSize,
+            initialBuffer,
+            config,
+            context,
+            parent,
+            metadata
+        );
     }
 }

@@ -17,9 +17,6 @@ import org.elasticsearch.common.transport.TransportAddress;
 import org.elasticsearch.transport.TransportService;
 
 import java.util.List;
-import java.util.function.Function;
-
-import static java.util.Collections.emptyList;
 
 /**
  * An implementation of {@link SeedHostsProvider} that reads hosts/ports
@@ -33,8 +30,10 @@ public class SettingsBasedSeedHostsProvider implements SeedHostsProvider {
 
     private static final Logger logger = LogManager.getLogger(SettingsBasedSeedHostsProvider.class);
 
-    public static final Setting<List<String>> DISCOVERY_SEED_HOSTS_SETTING =
-        Setting.listSetting("discovery.seed_hosts", emptyList(), Function.identity(), Property.NodeScope);
+    public static final Setting<List<String>> DISCOVERY_SEED_HOSTS_SETTING = Setting.stringListSetting(
+        "discovery.seed_hosts",
+        Property.NodeScope
+    );
 
     private final List<String> configuredHosts;
 

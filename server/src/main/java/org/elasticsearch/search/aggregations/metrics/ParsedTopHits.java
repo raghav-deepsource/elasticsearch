@@ -8,12 +8,13 @@
 
 package org.elasticsearch.search.aggregations.metrics;
 
-import org.elasticsearch.common.ParseField;
-import org.elasticsearch.common.xcontent.ObjectParser;
-import org.elasticsearch.common.xcontent.XContentBuilder;
-import org.elasticsearch.common.xcontent.XContentParser;
+import org.elasticsearch.common.xcontent.ChunkedToXContent;
 import org.elasticsearch.search.SearchHits;
 import org.elasticsearch.search.aggregations.ParsedAggregation;
+import org.elasticsearch.xcontent.ObjectParser;
+import org.elasticsearch.xcontent.ParseField;
+import org.elasticsearch.xcontent.XContentBuilder;
+import org.elasticsearch.xcontent.XContentParser;
 
 import java.io.IOException;
 
@@ -33,15 +34,21 @@ public class ParsedTopHits extends ParsedAggregation implements TopHits {
 
     @Override
     protected XContentBuilder doXContentBody(XContentBuilder builder, Params params) throws IOException {
-        return searchHits.toXContent(builder, params);
+        return ChunkedToXContent.wrapAsToXContent(searchHits).toXContent(builder, params);
     }
 
-    private static final ObjectParser<ParsedTopHits, Void> PARSER =
-            new ObjectParser<>(ParsedTopHits.class.getSimpleName(), true, ParsedTopHits::new);
+    private static final ObjectParser<ParsedTopHits, Void> PARSER = new ObjectParser<>(
+        ParsedTopHits.class.getSimpleName(),
+        true,
+        ParsedTopHits::new
+    );
     static {
         declareAggregationFields(PARSER);
-        PARSER.declareObject((topHit, searchHits) -> topHit.searchHits = searchHits, (parser, context) -> SearchHits.fromXContent(parser),
-                new ParseField(SearchHits.Fields.HITS));
+        PARSER.declareObject(
+            (topHit, searchHits) -> topHit.searchHits = searchHits,
+            (parser, context) -> SearchHits.fromXContent(parser),
+            new ParseField(SearchHits.Fields.HITS)
+        );
     }
 
     public static ParsedTopHits fromXContent(XContentParser parser, String name) throws IOException {

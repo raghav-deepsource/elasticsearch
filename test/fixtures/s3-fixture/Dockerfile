@@ -1,7 +1,4 @@
-FROM ubuntu:18.04
-
-RUN apt-get update -qqy
-RUN apt-get install -qqy openjdk-11-jre-headless
+FROM openjdk:17.0.2
 
 ARG fixtureClass
 ARG port

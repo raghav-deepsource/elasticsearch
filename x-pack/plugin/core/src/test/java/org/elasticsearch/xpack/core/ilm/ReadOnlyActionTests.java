@@ -7,7 +7,7 @@
 package org.elasticsearch.xpack.core.ilm;
 
 import org.elasticsearch.common.io.stream.Writeable.Reader;
-import org.elasticsearch.common.xcontent.XContentParser;
+import org.elasticsearch.xcontent.XContentParser;
 import org.elasticsearch.xpack.core.ilm.Step.StepKey;
 
 import java.util.List;
@@ -27,6 +27,11 @@ public class ReadOnlyActionTests extends AbstractActionTestCase<ReadOnlyAction> 
     }
 
     @Override
+    protected ReadOnlyAction mutateInstance(ReadOnlyAction instance) {
+        return null;// TODO implement https://github.com/elastic/elasticsearch/issues/25929
+    }
+
+    @Override
     protected Reader<ReadOnlyAction> instanceReader() {
         return ReadOnlyAction::new;
     }
@@ -34,8 +39,11 @@ public class ReadOnlyActionTests extends AbstractActionTestCase<ReadOnlyAction> 
     public void testToSteps() {
         ReadOnlyAction action = createTestInstance();
         String phase = randomAlphaOfLengthBetween(1, 10);
-        StepKey nextStepKey = new StepKey(randomAlphaOfLengthBetween(1, 10), randomAlphaOfLengthBetween(1, 10),
-                randomAlphaOfLengthBetween(1, 10));
+        StepKey nextStepKey = new StepKey(
+            randomAlphaOfLengthBetween(1, 10),
+            randomAlphaOfLengthBetween(1, 10),
+            randomAlphaOfLengthBetween(1, 10)
+        );
         List<Step> steps = action.toSteps(null, phase, nextStepKey);
         assertNotNull(steps);
         assertEquals(2, steps.size());

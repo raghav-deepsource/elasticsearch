@@ -8,25 +8,27 @@
 
 package org.elasticsearch.cluster.metadata;
 
-import org.elasticsearch.Version;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.admin.indices.template.delete.DeleteIndexTemplateRequest;
 import org.elasticsearch.action.admin.indices.template.put.PutIndexTemplateRequest;
 import org.elasticsearch.action.support.master.AcknowledgedResponse;
-import org.elasticsearch.client.AdminClient;
-import org.elasticsearch.client.Client;
-import org.elasticsearch.client.IndicesAdminClient;
+import org.elasticsearch.client.internal.AdminClient;
+import org.elasticsearch.client.internal.Client;
+import org.elasticsearch.client.internal.IndicesAdminClient;
 import org.elasticsearch.cluster.ClusterChangedEvent;
 import org.elasticsearch.cluster.ClusterState;
-import org.elasticsearch.cluster.node.DiscoveryNode;
 import org.elasticsearch.cluster.node.DiscoveryNodeRole;
+import org.elasticsearch.cluster.node.DiscoveryNodeUtils;
 import org.elasticsearch.cluster.node.DiscoveryNodes;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.bytes.BytesArray;
 import org.elasticsearch.common.bytes.BytesReference;
-import org.elasticsearch.common.collect.ImmutableOpenMap;
-import org.elasticsearch.common.collect.Tuple;
+import org.elasticsearch.common.util.Maps;
 import org.elasticsearch.common.util.concurrent.ThreadContext;
+import org.elasticsearch.common.util.set.Sets;
+import org.elasticsearch.core.Strings;
+import org.elasticsearch.core.Tuple;
+import org.elasticsearch.index.IndexVersion;
 import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.threadpool.TestThreadPool;
 import org.elasticsearch.threadpool.ThreadPool;
@@ -36,8 +38,6 @@ import org.junit.Before;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -45,24 +45,21 @@ import java.util.Set;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
-import static java.util.Collections.emptyMap;
 import static org.elasticsearch.test.ClusterServiceUtils.createClusterService;
 import static org.elasticsearch.test.ClusterServiceUtils.setState;
-import static org.hamcrest.CoreMatchers.nullValue;
-import static org.hamcrest.CoreMatchers.startsWith;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.empty;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.notNullValue;
-import static org.mockito.Matchers.any;
+import static org.hamcrest.Matchers.nullValue;
+import static org.hamcrest.Matchers.startsWith;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
-
 
 public class TemplateUpgradeServiceTests extends ESTestCase {
 
@@ -93,36 +90,39 @@ public class TemplateUpgradeServiceTests extends ESTestCase {
             IndexTemplateMetadata.builder("changed_test_template").patterns(randomIndexPatterns()).build()
         );
 
-        final TemplateUpgradeService service = new TemplateUpgradeService(null, clusterService, threadPool,
-            Arrays.asList(
-                templates -> {
-                    if (shouldAdd) {
-                        assertNull(templates.put("added_test_template",
-                            IndexTemplateMetadata.builder("added_test_template").patterns(randomIndexPatterns()).build()));
-                    }
-                    return templates;
-                },
-                templates -> {
-                    if (shouldRemove) {
-                        assertNotNull(templates.remove("removed_test_template"));
-                    }
-                    return templates;
-                },
-                templates -> {
-                    if (shouldChange) {
-                        assertNotNull(templates.put("changed_test_template",
-                            IndexTemplateMetadata.builder("changed_test_template").patterns(randomIndexPatterns()).order(10).build()));
-                    }
-                    return templates;
-                }
-            ));
+        final TemplateUpgradeService service = new TemplateUpgradeService(null, clusterService, threadPool, Arrays.asList(templates -> {
+            if (shouldAdd) {
+                assertNull(
+                    templates.put(
+                        "added_test_template",
+                        IndexTemplateMetadata.builder("added_test_template").patterns(randomIndexPatterns()).build()
+                    )
+                );
+            }
+            return templates;
+        }, templates -> {
+            if (shouldRemove) {
+                assertNotNull(templates.remove("removed_test_template"));
+            }
+            return templates;
+        }, templates -> {
+            if (shouldChange) {
+                assertNotNull(
+                    templates.put(
+                        "changed_test_template",
+                        IndexTemplateMetadata.builder("changed_test_template").patterns(randomIndexPatterns()).order(10).build()
+                    )
+                );
+            }
+            return templates;
+        }));
 
-        Optional<Tuple<Map<String, BytesReference>, Set<String>>> optChanges =
-            service.calculateTemplateChanges(metadata.templates());
+        Optional<Tuple<Map<String, BytesReference>, Set<String>>> optChanges = service.calculateTemplateChanges(metadata.templates());
 
         if (shouldAdd || shouldRemove || shouldChange) {
-            Tuple<Map<String, BytesReference>, Set<String>> changes = optChanges.orElseThrow(() ->
-                new AssertionError("Should have non empty changes"));
+            Tuple<Map<String, BytesReference>, Set<String>> changes = optChanges.orElseThrow(
+                () -> new AssertionError("Should have non empty changes")
+            );
             if (shouldAdd) {
                 assertThat(changes.v1().get("added_test_template"), notNullValue());
                 if (shouldChange) {
@@ -150,7 +150,6 @@ public class TemplateUpgradeServiceTests extends ESTestCase {
             assertThat(optChanges.isPresent(), equalTo(false));
         }
     }
-
 
     @SuppressWarnings("unchecked")
     public void testUpdateTemplates() {
@@ -184,17 +183,18 @@ public class TemplateUpgradeServiceTests extends ESTestCase {
             return null;
         }).when(mockIndicesAdminClient).deleteTemplate(any(DeleteIndexTemplateRequest.class), any(ActionListener.class));
 
-        Set<String> deletions = new HashSet<>(deletionsCount);
+        Set<String> deletions = Sets.newHashSetWithExpectedSize(deletionsCount);
         for (int i = 0; i < deletionsCount; i++) {
             deletions.add("remove_template_" + i);
         }
-        Map<String, BytesReference> additions = new HashMap<>(additionsCount);
+        Map<String, BytesReference> additions = Maps.newMapWithExpectedSize(additionsCount);
         for (int i = 0; i < additionsCount; i++) {
-            additions.put("add_template_" + i, new BytesArray("{\"index_patterns\" : \"*\", \"order\" : " + i + "}"));
+            additions.put("add_template_" + i, new BytesArray(Strings.format("""
+                {"index_patterns" : "*", "order" : %s}
+                """, i)));
         }
 
-        final TemplateUpgradeService service = new TemplateUpgradeService(mockClient, clusterService, threadPool,
-            Collections.emptyList());
+        final TemplateUpgradeService service = new TemplateUpgradeService(mockClient, clusterService, threadPool, Collections.emptyList());
 
         IllegalStateException ise = expectThrows(IllegalStateException.class, () -> service.upgradeTemplates(additions, deletions));
         assertThat(ise.getMessage(), containsString("template upgrade service should always happen in a system context"));
@@ -232,8 +232,7 @@ public class TemplateUpgradeServiceTests extends ESTestCase {
         assertThat(service.upgradesInProgress.get(), equalTo(2));
     }
 
-    private static final Set<DiscoveryNodeRole> MASTER_DATA_ROLES =
-            Set.of(DiscoveryNodeRole.MASTER_ROLE, DiscoveryNodeRole.DATA_ROLE);
+    private static final Set<DiscoveryNodeRole> MASTER_DATA_ROLES = Set.of(DiscoveryNodeRole.MASTER_ROLE, DiscoveryNodeRole.DATA_ROLE);
 
     @SuppressWarnings("unchecked")
     public void testClusterStateUpdate() throws InterruptedException {
@@ -281,23 +280,26 @@ public class TemplateUpgradeServiceTests extends ESTestCase {
             return null;
         }).when(mockIndicesAdminClient).deleteTemplate(any(DeleteIndexTemplateRequest.class), any(ActionListener.class));
 
-        new TemplateUpgradeService(mockClient, clusterService, threadPool,
-            Arrays.asList(
-                templates -> {
-                    assertNull(templates.put("added_test_template", IndexTemplateMetadata.builder("added_test_template")
-                        .patterns(Collections.singletonList("*")).build()));
-                    return templates;
-                },
-                templates -> {
-                    assertNotNull(templates.remove("removed_test_template"));
-                    return templates;
-                },
-                templates -> {
-                    assertNotNull(templates.put("changed_test_template", IndexTemplateMetadata.builder("changed_test_template")
-                        .patterns(Collections.singletonList("*")).order(10).build()));
-                    return templates;
-                }
-                )) {
+        new TemplateUpgradeService(mockClient, clusterService, threadPool, Arrays.asList(templates -> {
+            assertNull(
+                templates.put(
+                    "added_test_template",
+                    IndexTemplateMetadata.builder("added_test_template").patterns(Collections.singletonList("*")).build()
+                )
+            );
+            return templates;
+        }, templates -> {
+            assertNotNull(templates.remove("removed_test_template"));
+            return templates;
+        }, templates -> {
+            assertNotNull(
+                templates.put(
+                    "changed_test_template",
+                    IndexTemplateMetadata.builder("changed_test_template").patterns(Collections.singletonList("*")).order(10).build()
+                )
+            );
+            return templates;
+        })) {
 
             @Override
             void tryFinishUpgrade(AtomicBoolean anyUpgradeFailed) {
@@ -312,8 +314,9 @@ public class TemplateUpgradeServiceTests extends ESTestCase {
             }
 
             @Override
-            Optional<Tuple<Map<String, BytesReference>, Set<String>>>
-                    calculateTemplateChanges(ImmutableOpenMap<String, IndexTemplateMetadata> templates) {
+            Optional<Tuple<Map<String, BytesReference>, Set<String>>> calculateTemplateChanges(
+                Map<String, IndexTemplateMetadata> templates
+            ) {
                 final Optional<Tuple<Map<String, BytesReference>, Set<String>>> ans = super.calculateTemplateChanges(templates);
                 calculateInvocation.release();
                 return ans;
@@ -327,10 +330,16 @@ public class TemplateUpgradeServiceTests extends ESTestCase {
         };
 
         ClusterState prevState = ClusterState.EMPTY_STATE;
-        ClusterState state = ClusterState.builder(prevState).nodes(DiscoveryNodes.builder()
-            .add(new DiscoveryNode("node1", "node1", buildNewFakeTransportAddress(), emptyMap(), MASTER_DATA_ROLES, Version.CURRENT)
-            ).localNodeId("node1").masterNodeId("node1").build()
-        ).metadata(metadata).build();
+        ClusterState state = ClusterState.builder(prevState)
+            .nodes(
+                DiscoveryNodes.builder()
+                    .add(DiscoveryNodeUtils.builder("node1").name("node1").roles(MASTER_DATA_ROLES).build())
+                    .localNodeId("node1")
+                    .masterNodeId("node1")
+                    .build()
+            )
+            .metadata(metadata)
+            .build();
         setState(clusterService, state);
 
         changedInvocation.acquire();
@@ -403,7 +412,7 @@ public class TemplateUpgradeServiceTests extends ESTestCase {
         for (int i = 0; i < randomIntBetween(1, 5); i++) {
             builder.put(
                 IndexMetadata.builder(randomAlphaOfLength(10))
-                    .settings(settings(Version.CURRENT))
+                    .settings(settings(IndexVersion.current()))
                     .numberOfReplicas(randomIntBetween(0, 3))
                     .numberOfShards(randomIntBetween(1, 5))
             );
@@ -412,8 +421,6 @@ public class TemplateUpgradeServiceTests extends ESTestCase {
     }
 
     List<String> randomIndexPatterns() {
-        return IntStream.range(0, between(1, 10))
-            .mapToObj(n -> randomUnicodeOfCodepointLengthBetween(1, 100))
-            .collect(Collectors.toList());
+        return IntStream.range(0, between(1, 10)).mapToObj(n -> randomUnicodeOfCodepointLengthBetween(1, 100)).toList();
     }
 }

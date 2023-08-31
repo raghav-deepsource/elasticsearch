@@ -1,23 +1,4 @@
-ifdef::permanently-unreleased-branch[]
-
 [role="xpack"]
-[testenv="basic"]
-[[rollup-delete-job]]
-=== Delete legacy {rollup-jobs} API
-[subs="attributes"]
-++++
-<titleabbrev>Delete legacy {rollup-jobs}</titleabbrev>
-++++
-
-include::put-job.asciidoc[tag=legacy-rollup-admon]
-
-Deletes a legacy {rollup-job}.
-
-endif::[]
-ifndef::permanently-unreleased-branch[]
-
-[role="xpack"]
-[testenv="basic"]
 [[rollup-delete-job]]
 === Delete {rollup-jobs} API
 [subs="attributes"]
@@ -29,7 +10,8 @@ Deletes an existing {rollup-job}.
 
 experimental[]
 
-endif::[]
+NOTE: For version 8.5 and above we recommend <<downsampling,downsampling>> over
+rollups as a way to reduce your storage costs for time series data.
 
 [[rollup-delete-job-request]]
 ==== {api-request-title}

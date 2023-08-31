@@ -32,14 +32,14 @@ public class TimestampParsingException extends ElasticsearchException {
         return timestamp;
     }
 
-    public TimestampParsingException(StreamInput in) throws IOException{
+    public TimestampParsingException(StreamInput in) throws IOException {
         super(in);
         this.timestamp = in.readOptionalString();
     }
 
     @Override
-    public void writeTo(StreamOutput out) throws IOException {
-        super.writeTo(out);
+    protected void writeTo(StreamOutput out, Writer<Throwable> nestedExceptionsWriter) throws IOException {
+        super.writeTo(out, nestedExceptionsWriter);
         out.writeOptionalString(timestamp);
     }
 }

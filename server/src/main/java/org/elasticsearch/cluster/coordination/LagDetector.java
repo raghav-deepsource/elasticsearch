@@ -7,26 +7,42 @@
  */
 package org.elasticsearch.cluster.coordination;
 
+import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.elasticsearch.action.ActionListener;
+import org.elasticsearch.action.admin.cluster.node.hotthreads.NodesHotThreadsAction;
+import org.elasticsearch.action.admin.cluster.node.hotthreads.NodesHotThreadsRequest;
+import org.elasticsearch.action.admin.cluster.node.hotthreads.NodesHotThreadsResponse;
+import org.elasticsearch.client.internal.Client;
 import org.elasticsearch.cluster.node.DiscoveryNode;
+import org.elasticsearch.common.ReferenceDocs;
+import org.elasticsearch.common.Strings;
+import org.elasticsearch.common.logging.ChunkedLoggingStream;
 import org.elasticsearch.common.settings.Setting;
 import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.common.unit.TimeValue;
+import org.elasticsearch.common.util.concurrent.AbstractRunnable;
+import org.elasticsearch.common.util.concurrent.PrioritizedThrottledTaskRunner;
+import org.elasticsearch.common.util.concurrent.ThreadContext;
+import org.elasticsearch.core.Releasable;
+import org.elasticsearch.core.Releasables;
+import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.threadpool.ThreadPool.Names;
+import org.elasticsearch.transport.TransportService;
 
+import java.io.OutputStreamWriter;
+import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.Consumer;
 import java.util.function.Supplier;
-import java.util.stream.Collectors;
 
 import static org.elasticsearch.common.util.concurrent.ConcurrentCollections.newConcurrentMap;
+import static org.elasticsearch.core.Strings.format;
 
 /**
  * A publication can succeed and complete before all nodes have applied the published state and acknowledged it; however we need every node
@@ -38,21 +54,28 @@ public class LagDetector {
     private static final Logger logger = LogManager.getLogger(LagDetector.class);
 
     // the timeout for each node to apply a cluster state update after the leader has applied it, before being removed from the cluster
-    public static final Setting<TimeValue> CLUSTER_FOLLOWER_LAG_TIMEOUT_SETTING =
-        Setting.timeSetting("cluster.follower_lag.timeout",
-            TimeValue.timeValueMillis(90000), TimeValue.timeValueMillis(1), Setting.Property.NodeScope);
+    public static final Setting<TimeValue> CLUSTER_FOLLOWER_LAG_TIMEOUT_SETTING = Setting.timeSetting(
+        "cluster.follower_lag.timeout",
+        TimeValue.timeValueMillis(90000),
+        TimeValue.timeValueMillis(1),
+        Setting.Property.NodeScope
+    );
 
     private final TimeValue clusterStateApplicationTimeout;
-    private final Consumer<DiscoveryNode> onLagDetected;
+    private final LagListener lagListener;
     private final Supplier<DiscoveryNode> localNodeSupplier;
     private final ThreadPool threadPool;
     private final Map<DiscoveryNode, NodeAppliedStateTracker> appliedStateTrackersByNode = newConcurrentMap();
 
-    public LagDetector(final Settings settings, final ThreadPool threadPool, final Consumer<DiscoveryNode> onLagDetected,
-                       final Supplier<DiscoveryNode> localNodeSupplier) {
+    public LagDetector(
+        final Settings settings,
+        final ThreadPool threadPool,
+        final LagListener lagListener,
+        final Supplier<DiscoveryNode> localNodeSupplier
+    ) {
         this.threadPool = threadPool;
         this.clusterStateApplicationTimeout = CLUSTER_FOLLOWER_LAG_TIMEOUT_SETTING.get(settings);
-        this.onLagDetected = onLagDetected;
+        this.lagListener = lagListener;
         this.localNodeSupplier = localNodeSupplier;
     }
 
@@ -79,15 +102,17 @@ public class LagDetector {
     }
 
     public void startLagDetector(final long version) {
-        final List<NodeAppliedStateTracker> laggingTrackers
-            = appliedStateTrackersByNode.values().stream().filter(t -> t.appliedVersionLessThan(version)).collect(Collectors.toList());
+        final List<NodeAppliedStateTracker> laggingTrackers = appliedStateTrackersByNode.values()
+            .stream()
+            .filter(t -> t.appliedVersionLessThan(version))
+            .toList();
 
         if (laggingTrackers.isEmpty()) {
             logger.trace("lag detection for version {} is unnecessary: {}", version, appliedStateTrackersByNode.values());
         } else {
             logger.debug("starting lag detector for version {}: {}", version, laggingTrackers);
 
-            threadPool.scheduleUnlessShuttingDown(clusterStateApplicationTimeout, Names.GENERIC, new Runnable() {
+            threadPool.scheduleUnlessShuttingDown(clusterStateApplicationTimeout, Names.CLUSTER_COORDINATION, new Runnable() {
                 @Override
                 public void run() {
                     laggingTrackers.forEach(t -> t.checkForLag(version));
@@ -103,10 +128,12 @@ public class LagDetector {
 
     @Override
     public String toString() {
-        return "LagDetector{" +
-            "clusterStateApplicationTimeout=" + clusterStateApplicationTimeout +
-            ", appliedStateTrackersByNode=" + appliedStateTrackersByNode.values() +
-            '}';
+        return "LagDetector{"
+            + "clusterStateApplicationTimeout="
+            + clusterStateApplicationTimeout
+            + ", appliedStateTrackersByNode="
+            + appliedStateTrackersByNode.values()
+            + '}';
     }
 
     // for assertions
@@ -123,7 +150,7 @@ public class LagDetector {
         }
 
         void increaseAppliedVersion(long appliedVersion) {
-            long maxAppliedVersion = this.appliedVersion.updateAndGet(v -> Math.max(v, appliedVersion));
+            long maxAppliedVersion = this.appliedVersion.accumulateAndGet(appliedVersion, Math::max);
             logger.trace("{} applied version {}, max now {}", this, appliedVersion, maxAppliedVersion);
         }
 
@@ -133,10 +160,7 @@ public class LagDetector {
 
         @Override
         public String toString() {
-            return "NodeAppliedStateTracker{" +
-                "discoveryNode=" + discoveryNode +
-                ", appliedVersion=" + appliedVersion +
-                '}';
+            return "NodeAppliedStateTracker{" + "discoveryNode=" + discoveryNode + ", appliedVersion=" + appliedVersion + '}';
         }
 
         void checkForLag(final long version) {
@@ -153,8 +177,157 @@ public class LagDetector {
 
             logger.warn(
                 "node [{}] is lagging at cluster state version [{}], although publication of cluster state version [{}] completed [{}] ago",
-                discoveryNode, appliedVersion, version, clusterStateApplicationTimeout);
-            onLagDetected.accept(discoveryNode);
+                discoveryNode,
+                appliedVersion,
+                version,
+                clusterStateApplicationTimeout
+            );
+            lagListener.onLagDetected(discoveryNode, appliedVersion, version);
         }
     }
+
+    public interface LagListener {
+        /**
+         * Called when a node is detected as lagging and should be removed from the cluster.
+         * @param discoveryNode the node that is lagging.
+         * @param appliedVersion the cluster state version that the node has definitely applied
+         * @param expectedVersion the cluster state version that we were waiting for the node to apply
+         */
+        void onLagDetected(DiscoveryNode discoveryNode, long appliedVersion, long expectedVersion);
+    }
+
+    /**
+     * Wraps around another {@link LagListener} and logs the hot threads on the lagging node at debug level.
+     */
+    static class HotThreadsLoggingLagListener implements LagListener {
+
+        private final TransportService transportService;
+        private final Client client;
+        private final LagListener delegate;
+        private final PrioritizedThrottledTaskRunner<HotThreadsLoggingTask> loggingTaskRunner;
+
+        HotThreadsLoggingLagListener(TransportService transportService, Client client, LagListener delegate) {
+            this.transportService = transportService;
+            this.client = client;
+            this.delegate = delegate;
+            this.loggingTaskRunner = new PrioritizedThrottledTaskRunner<>("hot_threads", 1, transportService.getThreadPool().generic());
+        }
+
+        @Override
+        public void onLagDetected(DiscoveryNode discoveryNode, long appliedVersion, long expectedVersion) {
+            try {
+                if (logger.isDebugEnabled() == false) {
+                    return;
+                }
+
+                if (client == null) {
+                    // only happens in tests
+                    return;
+                }
+
+                final ActionListener<NodesHotThreadsResponse> debugListener = new ActionListener<>() {
+                    @Override
+                    public void onResponse(NodesHotThreadsResponse nodesHotThreadsResponse) {
+                        if (nodesHotThreadsResponse.getNodes().size() == 0) {
+                            assert nodesHotThreadsResponse.failures().size() == 1;
+                            onFailure(nodesHotThreadsResponse.failures().get(0));
+                            return;
+                        }
+
+                        loggingTaskRunner.enqueueTask(
+                            new HotThreadsLoggingTask(
+                                discoveryNode,
+                                appliedVersion,
+                                expectedVersion,
+                                nodesHotThreadsResponse.getNodes().get(0).getHotThreads()
+                            )
+                        );
+                    }
+
+                    @Override
+                    public void onFailure(Exception e) {
+                        logger.debug(
+                            () -> format(
+                                "failed to get hot threads from node [%s] lagging at version %s "
+                                    + "despite commit of cluster state version [%s]",
+                                discoveryNode.descriptionWithoutAttributes(),
+                                appliedVersion,
+                                expectedVersion
+                            ),
+                            e
+                        );
+                    }
+                };
+
+                // we're removing the node from the cluster so we need to keep the connection open for the hot threads request
+                transportService.connectToNode(discoveryNode, new ActionListener<>() {
+                    @Override
+                    public void onResponse(Releasable releasable) {
+                        boolean success = false;
+                        final ThreadContext threadContext = transportService.getThreadPool().getThreadContext();
+                        try (ThreadContext.StoredContext ignored = threadContext.stashContext()) {
+                            threadContext.markAsSystemContext();
+                            client.execute(
+                                NodesHotThreadsAction.INSTANCE,
+                                new NodesHotThreadsRequest(discoveryNode).threads(500),
+                                ActionListener.runBefore(debugListener, () -> Releasables.close(releasable))
+                            );
+                            success = true;
+                        } finally {
+                            if (success == false) {
+                                Releasables.close(releasable);
+                            }
+                        }
+                    }
+
+                    @Override
+                    public void onFailure(Exception e) {
+                        debugListener.onFailure(e);
+                    }
+                });
+            } finally {
+                // call delegate after transportService#connectToNode to keep existing connection open
+                delegate.onLagDetected(discoveryNode, appliedVersion, expectedVersion);
+            }
+        }
+    }
+
+    static class HotThreadsLoggingTask extends AbstractRunnable implements Comparable<HotThreadsLoggingTask> {
+
+        private final String nodeHotThreads;
+        private final String prefix;
+
+        HotThreadsLoggingTask(DiscoveryNode discoveryNode, long appliedVersion, long expectedVersion, String nodeHotThreads) {
+            this.nodeHotThreads = nodeHotThreads;
+            this.prefix = Strings.format(
+                "hot threads from node [%s] lagging at version [%d] despite commit of cluster state version [%d]",
+                discoveryNode.descriptionWithoutAttributes(),
+                appliedVersion,
+                expectedVersion
+            );
+        }
+
+        @Override
+        public void onFailure(Exception e) {
+            logger.error(Strings.format("unexpected exception reporting %s", prefix), e);
+        }
+
+        @Override
+        protected void doRun() throws Exception {
+            try (
+                var writer = new OutputStreamWriter(
+                    ChunkedLoggingStream.create(logger, Level.DEBUG, prefix, ReferenceDocs.LAGGING_NODE_TROUBLESHOOTING),
+                    StandardCharsets.UTF_8
+                )
+            ) {
+                writer.write(nodeHotThreads);
+            }
+        }
+
+        @Override
+        public int compareTo(HotThreadsLoggingTask o) {
+            return 0;
+        }
+    }
+
 }

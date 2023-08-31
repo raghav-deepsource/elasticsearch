@@ -4,6 +4,11 @@
 <titleabbrev>cat allocation</titleabbrev>
 ++++
 
+[IMPORTANT]
+====
+cat APIs are only intended for human consumption using the command line or {kib} 
+console. They are _not_ intended for use by applications.
+====
 
 Provides a snapshot of the number of shards allocated to each data node
 and their disk space.
@@ -76,7 +81,7 @@ hard-linked files.
 
 `disk.avail`::
 Free disk space available to {es}. {es} retrieves this metric from the node's
-OS. <<disk-allocator,Disk-based shard allocation>> uses this metric to assign
+OS. <<disk-based-shard-allocation,Disk-based shard allocation>> uses this metric to assign
 shards to nodes based on available disk space.
 
 `disk.total`::

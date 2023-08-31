@@ -8,144 +8,120 @@ package org.elasticsearch.xpack.security.rest;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.apache.logging.log4j.message.ParameterizedMessage;
 import org.apache.logging.log4j.util.Supplier;
-import org.elasticsearch.ExceptionsHelper;
+import org.elasticsearch.ElasticsearchSecurityException;
 import org.elasticsearch.action.ActionListener;
-import org.elasticsearch.client.node.NodeClient;
-import org.elasticsearch.common.util.Maps;
+import org.elasticsearch.client.internal.node.NodeClient;
 import org.elasticsearch.common.util.concurrent.ThreadContext;
-import org.elasticsearch.common.xcontent.MediaType;
-import org.elasticsearch.common.xcontent.MediaTypeRegistry;
-import org.elasticsearch.http.HttpChannel;
-import org.elasticsearch.license.XPackLicenseState;
-import org.elasticsearch.rest.BytesRestResponse;
+import org.elasticsearch.rest.FilterRestHandler;
 import org.elasticsearch.rest.RestChannel;
 import org.elasticsearch.rest.RestHandler;
 import org.elasticsearch.rest.RestRequest;
 import org.elasticsearch.rest.RestRequest.Method;
 import org.elasticsearch.rest.RestRequestFilter;
-import org.elasticsearch.rest.RestStatus;
-import org.elasticsearch.xpack.security.authc.AuthenticationService;
+import org.elasticsearch.rest.RestResponse;
+import org.elasticsearch.xpack.security.audit.AuditTrailService;
 import org.elasticsearch.xpack.security.authc.support.SecondaryAuthenticator;
-import org.elasticsearch.xpack.security.transport.SSLEngineUtils;
+import org.elasticsearch.xpack.security.authz.restriction.WorkflowService;
+import org.elasticsearch.xpack.security.operator.OperatorPrivileges;
 
-import java.io.IOException;
-import java.util.List;
-import java.util.Map;
+import static org.elasticsearch.core.Strings.format;
 
-public class SecurityRestFilter implements RestHandler {
+public class SecurityRestFilter extends FilterRestHandler implements RestHandler {
 
     private static final Logger logger = LogManager.getLogger(SecurityRestFilter.class);
 
-    private final RestHandler restHandler;
-    private final AuthenticationService authenticationService;
     private final SecondaryAuthenticator secondaryAuthenticator;
-    private final XPackLicenseState licenseState;
+    private final AuditTrailService auditTrailService;
+    private final boolean enabled;
     private final ThreadContext threadContext;
-    private final boolean extractClientCertificate;
+    private final WorkflowService workflowService;
+    private final OperatorPrivileges.OperatorPrivilegesService operatorPrivilegesService;
 
-    public SecurityRestFilter(XPackLicenseState licenseState, ThreadContext threadContext, AuthenticationService authenticationService,
-                              SecondaryAuthenticator secondaryAuthenticator, RestHandler restHandler, boolean extractClientCertificate) {
-        this.licenseState = licenseState;
+    public SecurityRestFilter(
+        boolean enabled,
+        ThreadContext threadContext,
+        SecondaryAuthenticator secondaryAuthenticator,
+        AuditTrailService auditTrailService,
+        WorkflowService workflowService,
+        RestHandler restHandler,
+        OperatorPrivileges.OperatorPrivilegesService operatorPrivilegesService
+    ) {
+        super(restHandler);
+        this.enabled = enabled;
         this.threadContext = threadContext;
-        this.authenticationService = authenticationService;
         this.secondaryAuthenticator = secondaryAuthenticator;
-        this.restHandler = restHandler;
-        this.extractClientCertificate = extractClientCertificate;
-    }
-
-    @Override
-    public boolean allowSystemIndexAccessByDefault() {
-        return restHandler.allowSystemIndexAccessByDefault();
+        this.auditTrailService = auditTrailService;
+        this.workflowService = workflowService;
+        // can be null if security is not enabled
+        this.operatorPrivilegesService = operatorPrivilegesService == null
+            ? OperatorPrivileges.NOOP_OPERATOR_PRIVILEGES_SERVICE
+            : operatorPrivilegesService;
     }
 
     @Override
     public void handleRequest(RestRequest request, RestChannel channel, NodeClient client) throws Exception {
-        if (licenseState.isSecurityEnabled() && request.method() != Method.OPTIONS) {
-            // CORS - allow for preflight unauthenticated OPTIONS request
-            if (extractClientCertificate) {
-                HttpChannel httpChannel = request.getHttpChannel();
-                SSLEngineUtils.extractClientCertificates(logger, threadContext, httpChannel);
-            }
+        // requests with the OPTIONS method should be handled elsewhere, and not by calling {@code RestHandler#handleRequest}
+        // authn is bypassed for HTTP requests with the OPTIONS method, so this sanity check prevents dispatching unauthenticated requests
+        if (request.method() == Method.OPTIONS) {
+            handleException(
+                request,
+                channel,
+                new ElasticsearchSecurityException("Cannot dispatch OPTIONS request, as they are not authenticated")
+            );
+            return;
+        }
 
-            final String requestUri = request.uri();
-            authenticationService.authenticate(maybeWrapRestRequest(request), ActionListener.wrap(
-                authentication -> {
-                    if (authentication == null) {
-                        logger.trace("No authentication available for REST request [{}]", requestUri);
-                    } else {
-                        logger.trace("Authenticated REST request [{}] as {}", requestUri, authentication);
-                    }
-                    secondaryAuthenticator.authenticateAndAttachToContext(request, ActionListener.wrap(
-                        secondaryAuthentication -> {
-                            if (secondaryAuthentication != null) {
-                                logger.trace("Found secondary authentication {} in REST request [{}]", secondaryAuthentication, requestUri);
-                            }
-                            RemoteHostHeader.process(request, threadContext);
-                            restHandler.handleRequest(request, channel, client);
-                        },
-                        e -> handleException("Secondary authentication", request, channel, e)));
-                }, e -> handleException("Authentication", request, channel, e)));
-        } else {
-            restHandler.handleRequest(request, channel, client);
+        if (enabled == false) {
+            doHandleRequest(request, channel, client);
+            return;
+        }
+
+        final RestRequest wrappedRequest = maybeWrapRestRequest(request);
+        auditTrailService.get().authenticationSuccess(wrappedRequest);
+        secondaryAuthenticator.authenticateAndAttachToContext(wrappedRequest, ActionListener.wrap(secondaryAuthentication -> {
+            if (secondaryAuthentication != null) {
+                logger.trace("Found secondary authentication {} in REST request [{}]", secondaryAuthentication, request.uri());
+            }
+            workflowService.resolveWorkflowAndStoreInThreadContext(getConcreteRestHandler(), threadContext);
+            doHandleRequest(request, channel, client);
+        }, e -> handleException(request, channel, e)));
+    }
+
+    private void doHandleRequest(RestRequest request, RestChannel channel, NodeClient client) throws Exception {
+        threadContext.sanitizeHeaders();
+        // operator privileges can short circuit to return a non-successful response
+        if (operatorPrivilegesService.checkRest(getConcreteRestHandler(), request, channel, threadContext)) {
+            try {
+                getDelegate().handleRequest(request, channel, client);
+            } catch (Exception e) {
+                logger.debug(() -> format("Request handling failed for REST request [%s]", request.uri()), e);
+                throw e;
+            }
         }
     }
 
-    private void handleException(String actionType, RestRequest request, RestChannel channel, Exception e) {
-        logger.debug(new ParameterizedMessage("{} failed for REST request [{}]", actionType, request.uri()), e);
-        final RestStatus restStatus = ExceptionsHelper.status(e);
+    protected void handleException(RestRequest request, RestChannel channel, Exception e) {
+        logger.debug(() -> format("failed for REST request [%s]", request.uri()), e);
+        threadContext.sanitizeHeaders();
         try {
-            channel.sendResponse(new BytesRestResponse(channel, restStatus, e) {
-
-                @Override
-                protected boolean skipStackTrace() { return restStatus == RestStatus.UNAUTHORIZED; }
-
-                @Override
-                public Map<String, List<String>> filterHeaders(Map<String, List<String>> headers) {
-                    if (headers.containsKey("Warning")) {
-                        return Maps.copyMapWithRemovedEntry(headers, "Warning");
-                    }
-                    return headers;
-                }
-
-            });
+            channel.sendResponse(new RestResponse(channel, e));
         } catch (Exception inner) {
             inner.addSuppressed(e);
-            logger.error((Supplier<?>) () ->
-                new ParameterizedMessage("failed to send failure response for uri [{}]", request.uri()), inner);
+            logger.error((Supplier<?>) () -> "failed to send failure response for uri [" + request.uri() + "]", inner);
         }
     }
 
-    @Override
-    public boolean canTripCircuitBreaker() {
-        return restHandler.canTripCircuitBreaker();
+    // for testing
+    OperatorPrivileges.OperatorPrivilegesService getOperatorPrivilegesService() {
+        return operatorPrivilegesService;
     }
 
-    @Override
-    public boolean supportsContentStream() {
-        return restHandler.supportsContentStream();
-    }
-
-    @Override
-    public boolean allowsUnsafeBuffers() {
-        return restHandler.allowsUnsafeBuffers();
-    }
-
-    @Override
-    public List<Route> routes() {
-        return restHandler.routes();
-    }
-
-    private RestRequest maybeWrapRestRequest(RestRequest restRequest) throws IOException {
-        if (restHandler instanceof RestRequestFilter) {
-            return ((RestRequestFilter)restHandler).getFilteredRequest(restRequest);
+    private RestRequest maybeWrapRestRequest(RestRequest restRequest) {
+        if (getConcreteRestHandler() instanceof RestRequestFilter rrf) {
+            return rrf.getFilteredRequest(restRequest);
         }
         return restRequest;
     }
 
-    @Override
-    public MediaTypeRegistry<? extends MediaType> validAcceptMediaTypes() {
-        return restHandler.validAcceptMediaTypes();
-    }
 }

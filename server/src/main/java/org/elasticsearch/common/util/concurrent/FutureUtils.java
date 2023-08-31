@@ -9,8 +9,8 @@
 package org.elasticsearch.common.util.concurrent;
 
 import org.elasticsearch.ElasticsearchTimeoutException;
-import org.elasticsearch.common.Nullable;
-import org.elasticsearch.common.SuppressForbidden;
+import org.elasticsearch.core.Nullable;
+import org.elasticsearch.core.SuppressForbidden;
 
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
@@ -60,7 +60,7 @@ public class FutureUtils {
      * @param <T> the type returned
      * @return the value of the future
      */
-    public static  <T> T get(Future<T> future, long timeout, TimeUnit unit) {
+    public static <T> T get(Future<T> future, long timeout, TimeUnit unit) {
         try {
             return future.get(timeout, unit);
         } catch (TimeoutException e) {
@@ -74,8 +74,8 @@ public class FutureUtils {
     }
 
     public static RuntimeException rethrowExecutionException(ExecutionException e) {
-        if (e.getCause() instanceof RuntimeException) {
-            return (RuntimeException) e.getCause();
+        if (e.getCause() instanceof RuntimeException runtimeException) {
+            return runtimeException;
         } else {
             return new UncategorizedExecutionException("Failed execution", e);
         }

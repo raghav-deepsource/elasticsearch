@@ -8,20 +8,20 @@
 
 package org.elasticsearch.search.fetch;
 
-import com.carrotsearch.hppc.IntArrayList;
 import org.apache.lucene.search.ScoreDoc;
-import org.elasticsearch.Version;
+import org.elasticsearch.TransportVersion;
 import org.elasticsearch.action.IndicesRequest;
 import org.elasticsearch.action.OriginalIndices;
 import org.elasticsearch.action.support.IndicesOptions;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
-import org.elasticsearch.search.internal.ShardSearchContextId;
 import org.elasticsearch.search.RescoreDocIds;
 import org.elasticsearch.search.dfs.AggregatedDfs;
+import org.elasticsearch.search.internal.ShardSearchContextId;
 import org.elasticsearch.search.internal.ShardSearchRequest;
 
 import java.io.IOException;
+import java.util.List;
 
 /**
  * Shard level fetch request used with search. Holds indices taken from the original search request
@@ -34,9 +34,16 @@ public class ShardFetchSearchRequest extends ShardFetchRequest implements Indice
     private final RescoreDocIds rescoreDocIds;
     private final AggregatedDfs aggregatedDfs;
 
-    public ShardFetchSearchRequest(OriginalIndices originalIndices, ShardSearchContextId id, ShardSearchRequest shardSearchRequest,
-                                   IntArrayList list, ScoreDoc lastEmittedDoc, RescoreDocIds rescoreDocIds, AggregatedDfs aggregatedDfs) {
-        super(id, list, lastEmittedDoc);
+    public ShardFetchSearchRequest(
+        OriginalIndices originalIndices,
+        ShardSearchContextId id,
+        ShardSearchRequest shardSearchRequest,
+        List<Integer> docIds,
+        ScoreDoc lastEmittedDoc,
+        RescoreDocIds rescoreDocIds,
+        AggregatedDfs aggregatedDfs
+    ) {
+        super(id, docIds, lastEmittedDoc);
         this.originalIndices = originalIndices;
         this.shardSearchRequest = shardSearchRequest;
         this.rescoreDocIds = rescoreDocIds;
@@ -46,7 +53,7 @@ public class ShardFetchSearchRequest extends ShardFetchRequest implements Indice
     public ShardFetchSearchRequest(StreamInput in) throws IOException {
         super(in);
         originalIndices = OriginalIndices.readOriginalIndices(in);
-        if (in.getVersion().onOrAfter(Version.V_7_10_0)) {
+        if (in.getTransportVersion().onOrAfter(TransportVersion.V_7_10_0)) {
             shardSearchRequest = in.readOptionalWriteable(ShardSearchRequest::new);
             rescoreDocIds = new RescoreDocIds(in);
             aggregatedDfs = in.readOptionalWriteable(AggregatedDfs::new);
@@ -61,7 +68,7 @@ public class ShardFetchSearchRequest extends ShardFetchRequest implements Indice
     public void writeTo(StreamOutput out) throws IOException {
         super.writeTo(out);
         OriginalIndices.writeOriginalIndices(originalIndices, out);
-        if (out.getVersion().onOrAfter(Version.V_7_10_0)) {
+        if (out.getTransportVersion().onOrAfter(TransportVersion.V_7_10_0)) {
             out.writeOptionalWriteable(shardSearchRequest);
             rescoreDocIds.writeTo(out);
             out.writeOptionalWriteable(aggregatedDfs);

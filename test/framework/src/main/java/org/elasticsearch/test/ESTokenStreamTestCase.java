@@ -11,18 +11,16 @@ package org.elasticsearch.test;
 import com.carrotsearch.randomizedtesting.annotations.Listeners;
 import com.carrotsearch.randomizedtesting.annotations.TimeoutSuite;
 
-import org.apache.lucene.analysis.BaseTokenStreamTestCase;
-import org.apache.lucene.util.LuceneTestCase;
-import org.apache.lucene.util.TimeUnits;
-import org.elasticsearch.Version;
+import org.apache.lucene.tests.analysis.BaseTokenStreamTestCase;
+import org.apache.lucene.tests.util.LuceneTestCase;
+import org.apache.lucene.tests.util.TimeUnits;
 import org.elasticsearch.bootstrap.BootstrapForTesting;
 import org.elasticsearch.cluster.metadata.IndexMetadata;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.index.IndexVersion;
 import org.elasticsearch.test.junit.listeners.ReproduceInfoPrinter;
 
-@Listeners({
-        ReproduceInfoPrinter.class
-})
+@Listeners({ ReproduceInfoPrinter.class })
 @TimeoutSuite(millis = TimeUnits.HOUR)
 @LuceneTestCase.SuppressReproduceLine
 @LuceneTestCase.SuppressSysoutChecks(bugUrl = "we log a lot on purpose")
@@ -42,7 +40,7 @@ public abstract class ESTokenStreamTestCase extends BaseTokenStreamTestCase {
     }
 
     public Settings.Builder newAnalysisSettingsBuilder() {
-        return Settings.builder().put(IndexMetadata.SETTING_VERSION_CREATED, Version.CURRENT);
+        return Settings.builder().put(IndexMetadata.SETTING_VERSION_CREATED, IndexVersion.current());
     }
 
 }

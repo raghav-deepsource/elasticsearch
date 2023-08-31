@@ -8,6 +8,7 @@
 package org.elasticsearch.repositories.hdfs;
 
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakFilters;
+
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.plugins.Plugin;
 import org.elasticsearch.repositories.blobstore.ESBlobStoreRepositoryIntegTestCase;
@@ -33,13 +34,19 @@ public class HdfsBlobStoreRepositoryTests extends ESBlobStoreRepositoryIntegTest
             .put("conf.fs.AbstractFileSystem.hdfs.impl", TestingFs.class.getName())
             .put("path", "foo")
             .put("chunk_size", randomIntBetween(100, 1000) + "k")
-            .put("compress", randomBoolean()).build();
+            .put("compress", randomBoolean())
+            .build();
     }
 
     @Override
     public void testSnapshotAndRestore() throws Exception {
         // the HDFS mockup doesn't preserve the repository contents after removing the repository
         testSnapshotAndRestore(false);
+    }
+
+    @Override
+    public void testBlobStoreBulkDeletion() throws Exception {
+        // HDFS does not implement bulk deletion from different BlobContainers
     }
 
     @Override

@@ -8,24 +8,19 @@
 
 package org.elasticsearch.index.cache.query;
 
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
-import org.apache.logging.log4j.message.ParameterizedMessage;
 import org.apache.lucene.search.DocIdSet;
-import org.elasticsearch.ExceptionsHelper;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.io.stream.Writeable;
 import org.elasticsearch.common.unit.ByteSizeValue;
-import org.elasticsearch.common.xcontent.ToXContent;
-import org.elasticsearch.common.xcontent.ToXContentFragment;
-import org.elasticsearch.common.xcontent.XContentBuilder;
+import org.elasticsearch.xcontent.ToXContent;
+import org.elasticsearch.xcontent.ToXContentFragment;
+import org.elasticsearch.xcontent.XContentBuilder;
 
 import java.io.IOException;
+import java.util.Objects;
 
 public class QueryCacheStats implements Writeable, ToXContentFragment {
-
-    private static final Logger logger = LogManager.getLogger(QueryCacheStats.class);
 
     private long ramBytesUsed;
     private long hitCount;
@@ -33,8 +28,7 @@ public class QueryCacheStats implements Writeable, ToXContentFragment {
     private long cacheCount;
     private long cacheSize;
 
-    public QueryCacheStats() {
-    }
+    public QueryCacheStats() {}
 
     public QueryCacheStats(StreamInput in) throws IOException {
         ramBytesUsed = in.readLong();
@@ -53,22 +47,18 @@ public class QueryCacheStats implements Writeable, ToXContentFragment {
     }
 
     public void add(QueryCacheStats stats) {
+        if (stats == null) {
+            return;
+        }
         ramBytesUsed += stats.ramBytesUsed;
         hitCount += stats.hitCount;
         missCount += stats.missCount;
         cacheCount += stats.cacheCount;
         cacheSize += stats.cacheSize;
+    }
 
-        // log only the first time a negative value is encountered for query cache size
-        // see: https://github.com/elastic/elasticsearch/issues/55434
-        if (ramBytesUsed < -1 && (ramBytesUsed + stats.ramBytesUsed >= 0)) {
-            logger.debug(() -> new ParameterizedMessage(
-                "negative query cache size [{}] on thread [{}] with stats [{}] and stack trace:\n{}",
-                ramBytesUsed,
-                Thread.currentThread().getName(),
-                stats.ramBytesUsed,
-                ExceptionsHelper.formatStackTrace(Thread.currentThread().getStackTrace())));
-        }
+    public void addRamBytesUsed(long additionalRamBytesUsed) {
+        ramBytesUsed += additionalRamBytesUsed;
     }
 
     public long getMemorySizeInBytes() {
@@ -76,7 +66,7 @@ public class QueryCacheStats implements Writeable, ToXContentFragment {
     }
 
     public ByteSizeValue getMemorySize() {
-        return new ByteSizeValue(ramBytesUsed);
+        return ByteSizeValue.ofBytes(ramBytesUsed);
     }
 
     /**
@@ -128,6 +118,23 @@ public class QueryCacheStats implements Writeable, ToXContentFragment {
         out.writeLong(missCount);
         out.writeLong(cacheCount);
         out.writeLong(cacheSize);
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        QueryCacheStats that = (QueryCacheStats) o;
+        return ramBytesUsed == that.ramBytesUsed
+            && hitCount == that.hitCount
+            && missCount == that.missCount
+            && cacheCount == that.cacheCount
+            && cacheSize == that.cacheSize;
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(ramBytesUsed, hitCount, missCount, cacheCount, cacheSize);
     }
 
     @Override

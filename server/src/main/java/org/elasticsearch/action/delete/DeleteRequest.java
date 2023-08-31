@@ -9,16 +9,17 @@
 package org.elasticsearch.action.delete;
 
 import org.apache.lucene.util.RamUsageEstimator;
-import org.elasticsearch.Version;
+import org.elasticsearch.TransportVersion;
 import org.elasticsearch.action.ActionRequestValidationException;
 import org.elasticsearch.action.CompositeIndicesRequest;
 import org.elasticsearch.action.DocWriteRequest;
 import org.elasticsearch.action.support.replication.ReplicatedWriteRequest;
-import org.elasticsearch.common.Nullable;
+import org.elasticsearch.cluster.routing.IndexRouting;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.lucene.uid.Versions;
+import org.elasticsearch.core.Nullable;
 import org.elasticsearch.index.VersionType;
 import org.elasticsearch.index.mapper.MapperService;
 import org.elasticsearch.index.shard.ShardId;
@@ -30,18 +31,18 @@ import static org.elasticsearch.index.seqno.SequenceNumbers.UNASSIGNED_PRIMARY_T
 import static org.elasticsearch.index.seqno.SequenceNumbers.UNASSIGNED_SEQ_NO;
 
 /**
- * A request to delete a document from an index based on its type and id. Best created using
- * {@link org.elasticsearch.client.Requests#deleteRequest(String)}.
+ * A request to delete a document from an index based on its type and id.
  * <p>
  * The operation requires the {@link #index()} and {@link #id(String)} to
  * be set.
  *
  * @see DeleteResponse
- * @see org.elasticsearch.client.Client#delete(DeleteRequest)
- * @see org.elasticsearch.client.Requests#deleteRequest(String)
+ * @see org.elasticsearch.client.internal.Client#delete(DeleteRequest)
  */
 public class DeleteRequest extends ReplicatedWriteRequest<DeleteRequest>
-        implements DocWriteRequest<DeleteRequest>, CompositeIndicesRequest {
+    implements
+        DocWriteRequest<DeleteRequest>,
+        CompositeIndicesRequest {
 
     private static final long SHALLOW_SIZE = RamUsageEstimator.shallowSizeOfInstance(DeleteRequest.class);
 
@@ -61,7 +62,7 @@ public class DeleteRequest extends ReplicatedWriteRequest<DeleteRequest>
 
     public DeleteRequest(@Nullable ShardId shardId, StreamInput in) throws IOException {
         super(shardId, in);
-        if (in.getVersion().before(Version.V_8_0_0)) {
+        if (in.getTransportVersion().before(TransportVersion.V_8_0_0)) {
             String type = in.readString();
             assert MapperService.SINGLE_MAPPING_NAME.equals(type) : "Expected [_doc] but received [" + type + "]";
         }
@@ -194,7 +195,7 @@ public class DeleteRequest extends ReplicatedWriteRequest<DeleteRequest>
      */
     public DeleteRequest setIfSeqNo(long seqNo) {
         if (seqNo < 0 && seqNo != UNASSIGNED_SEQ_NO) {
-            throw new IllegalArgumentException("sequence numbers must be non negative. got [" +  seqNo + "].");
+            throw new IllegalArgumentException("sequence numbers must be non negative. got [" + seqNo + "].");
         }
         ifSeqNo = seqNo;
         return this;
@@ -231,6 +232,16 @@ public class DeleteRequest extends ReplicatedWriteRequest<DeleteRequest>
     }
 
     @Override
+    public void process(IndexRouting indexRouting) {
+        // Nothing to do
+    }
+
+    @Override
+    public int route(IndexRouting indexRouting) {
+        return indexRouting.deleteShard(id, routing);
+    }
+
+    @Override
     public void writeTo(StreamOutput out) throws IOException {
         super.writeTo(out);
         writeBody(out);
@@ -243,7 +254,7 @@ public class DeleteRequest extends ReplicatedWriteRequest<DeleteRequest>
     }
 
     private void writeBody(StreamOutput out) throws IOException {
-        if (out.getVersion().before(Version.V_8_0_0)) {
+        if (out.getTransportVersion().before(TransportVersion.V_8_0_0)) {
             out.writeString(MapperService.SINGLE_MAPPING_NAME);
         }
         out.writeString(id);

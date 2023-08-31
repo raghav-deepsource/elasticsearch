@@ -26,13 +26,13 @@ import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.TransportRequest;
 import org.elasticsearch.transport.TransportService;
 import org.elasticsearch.xpack.searchablesnapshots.SearchableSnapshots;
-import org.elasticsearch.xpack.searchablesnapshots.cache.CacheService;
+import org.elasticsearch.xpack.searchablesnapshots.cache.full.CacheService;
 
 import java.io.IOException;
 import java.util.List;
 import java.util.Optional;
 
-import static org.elasticsearch.xpack.searchablesnapshots.SearchableSnapshots.SNAPSHOT_PARTIAL_SETTING;
+import static org.elasticsearch.snapshots.SearchableSnapshotsSettings.SNAPSHOT_PARTIAL_SETTING;
 
 public class TransportSearchableSnapshotCacheStoresAction extends TransportNodesAction<
     TransportSearchableSnapshotCacheStoresAction.Request,
@@ -62,9 +62,7 @@ public class TransportSearchableSnapshotCacheStoresAction extends TransportNodes
             actionFilters,
             Request::new,
             NodeRequest::new,
-            ThreadPool.Names.MANAGEMENT,
-            ThreadPool.Names.SAME,
-            NodeCacheFilesMetadata.class
+            ThreadPool.Names.MANAGEMENT
         );
         this.cacheService = cacheService.get();
     }
@@ -84,7 +82,7 @@ public class TransportSearchableSnapshotCacheStoresAction extends TransportNodes
     }
 
     @Override
-    protected NodeCacheFilesMetadata newNodeResponse(StreamInput in) throws IOException {
+    protected NodeCacheFilesMetadata newNodeResponse(StreamInput in, DiscoveryNode node) throws IOException {
         return new NodeCacheFilesMetadata(in);
     }
 
@@ -188,7 +186,7 @@ public class TransportSearchableSnapshotCacheStoresAction extends TransportNodes
 
         @Override
         protected void writeNodesTo(StreamOutput out, List<NodeCacheFilesMetadata> nodes) throws IOException {
-            out.writeList(nodes);
+            out.writeCollection(nodes);
         }
     }
 }

@@ -26,7 +26,6 @@ import java.util.concurrent.CountDownLatch;
 import static java.util.Collections.singletonList;
 import static org.elasticsearch.persistent.decider.EnableAssignmentDecider.Allocation;
 import static org.elasticsearch.persistent.decider.EnableAssignmentDecider.CLUSTER_TASKS_ALLOCATION_ENABLE_SETTING;
-import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertAcked;
 import static org.hamcrest.Matchers.equalTo;
 
 @ESIntegTestCase.ClusterScope(minNumDataNodes = 1)
@@ -53,8 +52,12 @@ public class EnableAssignmentDeciderIT extends ESIntegTestCase {
         final CountDownLatch latch = new CountDownLatch(numberOfTasks);
         for (int i = 0; i < numberOfTasks; i++) {
             PersistentTasksService service = internalCluster().getInstance(PersistentTasksService.class);
-            service.sendStartRequest("task_" + i, TestPersistentTasksExecutor.NAME, new TestParams(randomAlphaOfLength(10)),
-                ActionListener.wrap(latch::countDown));
+            service.sendStartRequest(
+                "task_" + i,
+                TestPersistentTasksExecutor.NAME,
+                new TestParams(randomAlphaOfLength(10)),
+                ActionListener.running(latch::countDown)
+            );
         }
         latch.await();
 
@@ -64,9 +67,7 @@ public class EnableAssignmentDeciderIT extends ESIntegTestCase {
 
         logger.trace("waiting for the tasks to be running");
         assertBusy(() -> {
-            ListTasksResponse listTasks = client().admin().cluster().prepareListTasks()
-                                                                    .setActions(TestPersistentTasksExecutor.NAME + "[c]")
-                                                                    .get();
+            ListTasksResponse listTasks = clusterAdmin().prepareListTasks().setActions(TestPersistentTasksExecutor.NAME + "[c]").get();
             assertThat(listTasks.getTasks().size(), equalTo(numberOfTasks));
         });
 
@@ -83,14 +84,16 @@ public class EnableAssignmentDeciderIT extends ESIntegTestCase {
 
             logger.trace("persistent tasks are not assigned");
             tasks = internalCluster().clusterService().state().getMetadata().custom(PersistentTasksCustomMetadata.TYPE);
-            assertEquals(numberOfTasks, tasks.tasks().stream()
-                .filter(t -> TestPersistentTasksExecutor.NAME.equals(t.getTaskName()))
-                .filter(t -> t.isAssigned() == false)
-                .count());
+            assertEquals(
+                numberOfTasks,
+                tasks.tasks()
+                    .stream()
+                    .filter(t -> TestPersistentTasksExecutor.NAME.equals(t.getTaskName()))
+                    .filter(t -> t.isAssigned() == false)
+                    .count()
+            );
 
-            ListTasksResponse runningTasks = client().admin().cluster().prepareListTasks()
-                .setActions(TestPersistentTasksExecutor.NAME + "[c]")
-                .get();
+            ListTasksResponse runningTasks = clusterAdmin().prepareListTasks().setActions(TestPersistentTasksExecutor.NAME + "[c]").get();
             assertThat(runningTasks.getTasks().size(), equalTo(0));
 
             logger.trace("enable persistent tasks assignment");
@@ -101,9 +104,7 @@ public class EnableAssignmentDeciderIT extends ESIntegTestCase {
             }
 
             assertBusy(() -> {
-                ListTasksResponse listTasks = client().admin().cluster().prepareListTasks()
-                    .setActions(TestPersistentTasksExecutor.NAME + "[c]")
-                    .get();
+                ListTasksResponse listTasks = clusterAdmin().prepareListTasks().setActions(TestPersistentTasksExecutor.NAME + "[c]").get();
                 assertThat(listTasks.getTasks().size(), equalTo(numberOfTasks));
             });
 
@@ -113,7 +114,7 @@ public class EnableAssignmentDeciderIT extends ESIntegTestCase {
     }
 
     private void assertEnableAssignmentSetting(final Allocation expected) {
-        ClusterStateResponse clusterStateResponse = client().admin().cluster().prepareState().clear().setMetadata(true).get();
+        ClusterStateResponse clusterStateResponse = clusterAdmin().prepareState().clear().setMetadata(true).get();
         Settings settings = clusterStateResponse.getState().getMetadata().settings();
 
         String value = settings.get(CLUSTER_TASKS_ALLOCATION_ENABLE_SETTING.getKey());
@@ -121,18 +122,15 @@ public class EnableAssignmentDeciderIT extends ESIntegTestCase {
     }
 
     private void disablePersistentTasksAssignment() {
-        Settings.Builder settings = Settings.builder().put(CLUSTER_TASKS_ALLOCATION_ENABLE_SETTING.getKey(), Allocation.NONE);
-        assertAcked(client().admin().cluster().prepareUpdateSettings().setPersistentSettings(settings));
+        updateClusterSettings(Settings.builder().put(CLUSTER_TASKS_ALLOCATION_ENABLE_SETTING.getKey(), Allocation.NONE));
     }
 
     private void enablePersistentTasksAssignment() {
-        Settings.Builder settings = Settings.builder().put(CLUSTER_TASKS_ALLOCATION_ENABLE_SETTING.getKey(), Allocation.ALL);
-        assertAcked(client().admin().cluster().prepareUpdateSettings().setPersistentSettings(settings));
+        updateClusterSettings(Settings.builder().put(CLUSTER_TASKS_ALLOCATION_ENABLE_SETTING.getKey(), Allocation.ALL));
     }
 
     private void resetPersistentTasksAssignment() {
-        Settings.Builder settings = Settings.builder().putNull(CLUSTER_TASKS_ALLOCATION_ENABLE_SETTING.getKey());
-        assertAcked(client().admin().cluster().prepareUpdateSettings().setPersistentSettings(settings));
+        updateClusterSettings(Settings.builder().putNull(CLUSTER_TASKS_ALLOCATION_ENABLE_SETTING.getKey()));
     }
 
 }

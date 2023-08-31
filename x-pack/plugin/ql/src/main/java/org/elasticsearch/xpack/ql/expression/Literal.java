@@ -68,7 +68,7 @@ public class Literal extends LeafExpression {
 
     @Override
     public int hashCode() {
-        return Objects.hash(value, dataType);
+        return Objects.hash(dataType, value);
     }
 
     @Override

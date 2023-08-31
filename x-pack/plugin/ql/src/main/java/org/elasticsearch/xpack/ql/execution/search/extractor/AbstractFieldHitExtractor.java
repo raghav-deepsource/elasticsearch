@@ -6,6 +6,7 @@
  */
 package org.elasticsearch.xpack.ql.execution.search.extractor;
 
+import org.elasticsearch.TransportVersion;
 import org.elasticsearch.common.document.DocumentField;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
@@ -16,6 +17,8 @@ import org.elasticsearch.xpack.ql.type.DataTypes;
 
 import java.io.IOException;
 import java.time.ZoneId;
+import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -29,21 +32,34 @@ public abstract class AbstractFieldHitExtractor implements HitExtractor {
     private final String fieldName, hitName;
     private final DataType dataType;
     private final ZoneId zoneId;
-    private final boolean arrayLeniency;
+
+    protected MultiValueSupport multiValueSupport;
+
+    public enum MultiValueSupport {
+        NONE,
+        LENIENT,
+        FULL
+    }
 
     protected AbstractFieldHitExtractor(String name, DataType dataType, ZoneId zoneId) {
-        this(name, dataType, zoneId, null, false);
+        this(name, dataType, zoneId, null, MultiValueSupport.NONE);
     }
 
-    protected AbstractFieldHitExtractor(String name, DataType dataType, ZoneId zoneId, boolean arrayLeniency) {
-        this(name, dataType, zoneId, null, arrayLeniency);
+    protected AbstractFieldHitExtractor(String name, DataType dataType, ZoneId zoneId, MultiValueSupport multiValueSupport) {
+        this(name, dataType, zoneId, null, multiValueSupport);
     }
 
-    protected AbstractFieldHitExtractor(String name, DataType dataType, ZoneId zoneId, String hitName, boolean arrayLeniency) {
+    protected AbstractFieldHitExtractor(
+        String name,
+        DataType dataType,
+        ZoneId zoneId,
+        String hitName,
+        MultiValueSupport multiValueSupport
+    ) {
         this.fieldName = name;
         this.dataType = dataType;
         this.zoneId = zoneId;
-        this.arrayLeniency = arrayLeniency;
+        this.multiValueSupport = multiValueSupport;
         this.hitName = hitName;
 
         if (hitName != null) {
@@ -58,7 +74,11 @@ public abstract class AbstractFieldHitExtractor implements HitExtractor {
         String typeName = in.readOptionalString();
         dataType = typeName != null ? loadTypeFromName(typeName) : null;
         hitName = in.readOptionalString();
-        arrayLeniency = in.readBoolean();
+        if (in.getTransportVersion().before(TransportVersion.V_8_6_0)) {
+            this.multiValueSupport = in.readBoolean() ? MultiValueSupport.LENIENT : MultiValueSupport.NONE;
+        } else {
+            this.multiValueSupport = in.readEnum(MultiValueSupport.class);
+        }
         zoneId = readZoneId(in);
     }
 
@@ -73,7 +93,12 @@ public abstract class AbstractFieldHitExtractor implements HitExtractor {
         out.writeString(fieldName);
         out.writeOptionalString(dataType == null ? null : dataType.typeName());
         out.writeOptionalString(hitName);
-        out.writeBoolean(arrayLeniency);
+        if (out.getTransportVersion().before(TransportVersion.V_8_6_0)) {
+            out.writeBoolean(multiValueSupport != MultiValueSupport.NONE);
+        } else {
+            out.writeEnum(multiValueSupport);
+        }
+
     }
 
     @Override
@@ -81,13 +106,66 @@ public abstract class AbstractFieldHitExtractor implements HitExtractor {
         Object value = null;
         DocumentField field = null;
         if (hitName != null) {
-            // a nested field value is grouped under the nested parent name (ie dep.dep_name lives under "dep":[{dep_name:value}])
-            field = hit.field(hitName);
+            value = unwrapFieldsMultiValue(extractNestedField(hit));
         } else {
             field = hit.field(fieldName);
+            if (field != null) {
+                value = unwrapFieldsMultiValue(field.getValues());
+            }
         }
-        if (field != null) {
-            value = unwrapFieldsMultiValue(field.getValues());
+        return value;
+    }
+
+    /*
+     * For a path of fields like root.nested1.nested2.leaf where nested1 and nested2 are nested field types,
+     * fieldName is root.nested1.nested2.leaf, while hitName is root.nested1.nested2
+     * We first look for root.nested1.nested2 or root.nested1 or root in the SearchHit until we find something.
+     * If the DocumentField lives under "root.nested1" the remaining path to search for (in the DocumentField itself) is nested2.
+     * After this step is done, what remains to be done is just getting the leaf values.
+     */
+    @SuppressWarnings("unchecked")
+    private Object extractNestedField(SearchHit hit) {
+        Object value;
+        DocumentField field;
+        String tempHitname = hitName;
+        List<String> remainingPath = new ArrayList<>();
+        // first, search for the "root" DocumentField under which the remaining path of nested document values is
+        while ((field = hit.field(tempHitname)) == null) {
+            int indexOfDot = tempHitname.lastIndexOf(".");
+            if (indexOfDot < 0) {// there is no such field in the hit
+                return null;
+            }
+            remainingPath.add(0, tempHitname.substring(indexOfDot + 1));
+            tempHitname = tempHitname.substring(0, indexOfDot);
+        }
+        // then dig into DocumentField's structure until we reach the field we are interested into
+        if (remainingPath.size() > 0) {
+            List<Object> values = field.getValues();
+            Iterator<String> pathIterator = remainingPath.iterator();
+            while (pathIterator.hasNext()) {
+                String pathElement = pathIterator.next();
+                Map<String, List<Object>> elements = (Map<String, List<Object>>) values.get(0);
+                values = elements.get(pathElement);
+                /*
+                 * if this path is not found it means we hit another nested document (inner_root_1.inner_root_2.nested_field_2)
+                 * something like this
+                 * "root_field_1.root_field_2.nested_field_1" : [
+                 *     {
+                 *       "inner_root_1.inner_root_2.nested_field_2" : [
+                 *         {
+                 *           "leaf_field" : [
+                 *             "abc2"
+                 *           ]
+                 * So, start re-building the path until the right one is found, ie inner_root_1.inner_root_2......
+                 */
+                while (values == null) {
+                    pathElement += "." + pathIterator.next();
+                    values = elements.get(pathElement);
+                }
+            }
+            value = ((Map<String, Object>) values.get(0)).get(fieldName.substring(hitName.length() + 1));
+        } else {
+            value = field.getValues();
         }
         return value;
     }
@@ -98,16 +176,21 @@ public abstract class AbstractFieldHitExtractor implements HitExtractor {
         }
         if (values instanceof Map && hitName != null) {
             // extract the sub-field from a nested field (dep.dep_name -> dep_name)
-            return unwrapFieldsMultiValue(((Map<?,?>) values).get(fieldName.substring(hitName.length() + 1)));
+            return unwrapFieldsMultiValue(((Map<?, ?>) values).get(fieldName.substring(hitName.length() + 1)));
         }
-        if (values instanceof List) {
-            List<?> list = (List<?>) values;
+        if (values instanceof List<?> list) {
             if (list.isEmpty()) {
                 return null;
             } else {
                 if (isPrimitive(list) == false) {
-                    if (list.size() == 1 || arrayLeniency) {
+                    if (list.size() == 1 || multiValueSupport == MultiValueSupport.LENIENT) {
                         return unwrapFieldsMultiValue(list.get(0));
+                    } else if (multiValueSupport == MultiValueSupport.FULL) {
+                        List<Object> unwrappedValues = new ArrayList<>();
+                        for (Object value : list) {
+                            unwrappedValues.add(unwrapFieldsMultiValue(value));
+                        }
+                        values = unwrappedValues;
                     } else {
                         throw new QlIllegalArgumentException("Arrays (returned by [{}]) are not supported", fieldName);
                     }
@@ -116,11 +199,26 @@ public abstract class AbstractFieldHitExtractor implements HitExtractor {
         }
 
         Object unwrapped = unwrapCustomValue(values);
-        if (unwrapped != null) {
+        if (unwrapped != null && isListOfNulls(unwrapped) == false) {
             return unwrapped;
         }
 
         return values;
+    }
+
+    private boolean isListOfNulls(Object unwrapped) {
+        if (unwrapped instanceof List<?> list) {
+            if (list.size() == 0) {
+                return false;
+            }
+            for (Object o : list) {
+                if (o != null) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        return false;
     }
 
     protected abstract Object unwrapCustomValue(Object values);
@@ -144,8 +242,8 @@ public abstract class AbstractFieldHitExtractor implements HitExtractor {
         return dataType;
     }
 
-    public boolean arrayLeniency() {
-        return arrayLeniency;
+    public MultiValueSupport multiValueSupport() {
+        return multiValueSupport;
     }
 
     @Override
@@ -159,13 +257,11 @@ public abstract class AbstractFieldHitExtractor implements HitExtractor {
             return false;
         }
         AbstractFieldHitExtractor other = (AbstractFieldHitExtractor) obj;
-        return fieldName.equals(other.fieldName)
-                && hitName.equals(other.hitName)
-                && arrayLeniency == other.arrayLeniency;
+        return fieldName.equals(other.fieldName) && hitName.equals(other.hitName) && multiValueSupport == other.multiValueSupport;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(fieldName, hitName, arrayLeniency);
+        return Objects.hash(fieldName, hitName, multiValueSupport);
     }
 }

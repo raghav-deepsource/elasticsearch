@@ -21,21 +21,21 @@ import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.codec.http.DefaultFullHttpRequest;
 import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.FullHttpResponse;
+import io.netty.handler.codec.http.HttpClientCodec;
 import io.netty.handler.codec.http.HttpContentDecompressor;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpObject;
 import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpRequest;
-import io.netty.handler.codec.http.HttpRequestEncoder;
 import io.netty.handler.codec.http.HttpResponse;
-import io.netty.handler.codec.http.HttpResponseDecoder;
 import io.netty.handler.codec.http.HttpVersion;
-import org.elasticsearch.common.collect.Tuple;
+
 import org.elasticsearch.common.unit.ByteSizeUnit;
 import org.elasticsearch.common.unit.ByteSizeValue;
+import org.elasticsearch.core.Tuple;
 import org.elasticsearch.tasks.Task;
-import org.elasticsearch.transport.NettyAllocator;
+import org.elasticsearch.transport.netty4.NettyAllocator;
 
 import java.io.Closeable;
 import java.net.SocketAddress;
@@ -67,7 +67,7 @@ class Netty4HttpClient implements Closeable {
     static Collection<String> returnOpaqueIds(Collection<FullHttpResponse> responses) {
         List<String> list = new ArrayList<>(responses.size());
         for (HttpResponse response : responses) {
-            list.add(response.headers().get(Task.X_OPAQUE_ID));
+            list.add(response.headers().get(Task.X_OPAQUE_ID_HTTP_HEADER));
         }
         return list;
     }
@@ -75,8 +75,7 @@ class Netty4HttpClient implements Closeable {
     private final Bootstrap clientBootstrap;
 
     Netty4HttpClient() {
-        clientBootstrap = new Bootstrap()
-            .channel(NettyAllocator.getChannelType())
+        clientBootstrap = new Bootstrap().channel(NettyAllocator.getChannelType())
             .option(ChannelOption.ALLOCATOR, NettyAllocator.getAllocator())
             .group(new NioEventLoopGroup(1));
     }
@@ -87,6 +86,7 @@ class Netty4HttpClient implements Closeable {
             final HttpRequest httpRequest = new DefaultFullHttpRequest(HTTP_1_1, HttpMethod.GET, uris[i]);
             httpRequest.headers().add(HOST, "localhost");
             httpRequest.headers().add("X-Opaque-ID", String.valueOf(i));
+            httpRequest.headers().add("traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01");
             requests.add(httpRequest);
         }
         return sendRequests(remoteAddress, requests);
@@ -108,8 +108,11 @@ class Netty4HttpClient implements Closeable {
         return processRequestsWithBody(HttpMethod.PUT, remoteAddress, urisAndBodies);
     }
 
-    private List<FullHttpResponse> processRequestsWithBody(HttpMethod method, SocketAddress remoteAddress, List<Tuple<String,
-        CharSequence>> urisAndBodies) throws InterruptedException {
+    private List<FullHttpResponse> processRequestsWithBody(
+        HttpMethod method,
+        SocketAddress remoteAddress,
+        List<Tuple<String, CharSequence>> urisAndBodies
+    ) throws InterruptedException {
         List<HttpRequest> requests = new ArrayList<>(urisAndBodies.size());
         for (Tuple<String, CharSequence> uriAndBody : urisAndBodies) {
             ByteBuf content = Unpooled.copiedBuffer(uriAndBody.v2(), StandardCharsets.UTF_8);
@@ -122,9 +125,8 @@ class Netty4HttpClient implements Closeable {
         return sendRequests(remoteAddress, requests);
     }
 
-    private synchronized List<FullHttpResponse> sendRequests(
-        final SocketAddress remoteAddress,
-        final Collection<HttpRequest> requests) throws InterruptedException {
+    private synchronized List<FullHttpResponse> sendRequests(final SocketAddress remoteAddress, final Collection<HttpRequest> requests)
+        throws InterruptedException {
         final CountDownLatch latch = new CountDownLatch(requests.size());
         final List<FullHttpResponse> content = Collections.synchronizedList(new ArrayList<>(requests.size()));
 
@@ -172,8 +174,7 @@ class Netty4HttpClient implements Closeable {
         @Override
         protected void initChannel(SocketChannel ch) {
             final int maxContentLength = new ByteSizeValue(100, ByteSizeUnit.MB).bytesAsInt();
-            ch.pipeline().addLast(new HttpResponseDecoder());
-            ch.pipeline().addLast(new HttpRequestEncoder());
+            ch.pipeline().addLast(new HttpClientCodec());
             ch.pipeline().addLast(new HttpContentDecompressor());
             ch.pipeline().addLast(new HttpObjectAggregator(maxContentLength));
             ch.pipeline().addLast(new SimpleChannelInboundHandler<HttpObject>() {

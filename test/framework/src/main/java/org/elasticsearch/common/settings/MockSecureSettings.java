@@ -9,6 +9,7 @@
 package org.elasticsearch.common.settings;
 
 import org.elasticsearch.common.hash.MessageDigests;
+import org.elasticsearch.common.io.stream.StreamOutput;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -31,8 +32,7 @@ public class MockSecureSettings implements SecureSettings {
     private Set<String> settingNames = new HashSet<>();
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
-    public MockSecureSettings() {
-    }
+    public MockSecureSettings() {}
 
     private MockSecureSettings(MockSecureSettings source) {
         secureStrings.putAll(source.secureStrings);
@@ -113,5 +113,10 @@ public class MockSecureSettings implements SecureSettings {
     public SecureSettings clone() {
         ensureOpen();
         return new MockSecureSettings(this);
+    }
+
+    @Override
+    public void writeTo(StreamOutput out) throws IOException {
+        throw new IllegalStateException("Not supported, implement me!");
     }
 }

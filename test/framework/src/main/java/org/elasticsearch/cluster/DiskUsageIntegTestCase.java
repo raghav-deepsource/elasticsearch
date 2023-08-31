@@ -8,14 +8,13 @@
 
 package org.elasticsearch.cluster;
 
-import org.apache.lucene.mockfile.FilterFileStore;
-import org.apache.lucene.mockfile.FilterFileSystemProvider;
-import org.apache.lucene.mockfile.FilterPath;
-import org.apache.lucene.util.Constants;
-import org.elasticsearch.common.io.PathUtils;
-import org.elasticsearch.common.io.PathUtilsForTesting;
+import org.apache.lucene.tests.mockfile.FilterFileStore;
+import org.apache.lucene.tests.mockfile.FilterFileSystemProvider;
+import org.apache.lucene.tests.mockfile.FilterPath;
 import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.core.internal.io.IOUtils;
+import org.elasticsearch.core.IOUtils;
+import org.elasticsearch.core.PathUtils;
+import org.elasticsearch.core.PathUtilsForTesting;
 import org.elasticsearch.env.Environment;
 import org.elasticsearch.monitor.fs.FsService;
 import org.elasticsearch.plugins.Plugin;
@@ -26,6 +25,9 @@ import org.junit.Before;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.AccessDeniedException;
+import java.nio.file.DirectoryIteratorException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileStore;
 import java.nio.file.FileSystem;
@@ -76,7 +78,7 @@ public class DiskUsageIntegTestCase extends ESIntegTestCase {
     }
 
     @Override
-    protected Settings nodeSettings(int nodeOrdinal) {
+    protected Settings nodeSettings(int nodeOrdinal, Settings otherSettings) {
         final Path dataPath = fileSystemProvider.getRootDir().resolve("node-" + nodeOrdinal);
         try {
             Files.createDirectories(dataPath);
@@ -85,7 +87,7 @@ public class DiskUsageIntegTestCase extends ESIntegTestCase {
         }
         fileSystemProvider.addTrackedPath(dataPath);
         return Settings.builder()
-            .put(super.nodeSettings(nodeOrdinal))
+            .put(super.nodeSettings(nodeOrdinal, otherSettings))
             .put(Environment.PATH_DATA_SETTING.getKey(), dataPath)
             .put(FsService.ALWAYS_REFRESH_SETTING.getKey(), true)
             .build();
@@ -113,11 +115,11 @@ public class DiskUsageIntegTestCase extends ESIntegTestCase {
 
         @Override
         public long getTotalSpace() throws IOException {
-            final long totalSpace = this.totalSpace;
-            if (totalSpace == -1) {
+            final long totalSpaceCopy = this.totalSpace;
+            if (totalSpaceCopy == -1) {
                 return super.getTotalSpace();
             } else {
-                return totalSpace;
+                return totalSpaceCopy;
             }
         }
 
@@ -128,30 +130,34 @@ public class DiskUsageIntegTestCase extends ESIntegTestCase {
 
         @Override
         public long getUsableSpace() throws IOException {
-            final long totalSpace = this.totalSpace;
-            if (totalSpace == -1) {
+            final long totalSpaceCopy = this.totalSpace;
+            if (totalSpaceCopy == -1) {
                 return super.getUsableSpace();
             } else {
-                return Math.max(0L, totalSpace - getTotalFileSize(path));
+                return Math.max(0L, totalSpaceCopy - getTotalFileSize(path));
             }
         }
 
         @Override
         public long getUnallocatedSpace() throws IOException {
-            final long totalSpace = this.totalSpace;
-            if (totalSpace == -1) {
+            final long totalSpaceCopy = this.totalSpace;
+            if (totalSpaceCopy == -1) {
                 return super.getUnallocatedSpace();
             } else {
-                return Math.max(0L, totalSpace - getTotalFileSize(path));
+                return Math.max(0L, totalSpaceCopy - getTotalFileSize(path));
             }
         }
 
         private static long getTotalFileSize(Path path) throws IOException {
             if (Files.isRegularFile(path)) {
+                if (path.getFileName().toString().equals("nodes")
+                    && Files.readString(path, StandardCharsets.UTF_8).contains("prevent a downgrade")) {
+                    return 0;
+                }
                 try {
                     return Files.size(path);
-                } catch (NoSuchFileException | FileNotFoundException e) {
-                    // probably removed
+                } catch (NoSuchFileException | FileNotFoundException | AccessDeniedException e) {
+                    // probably removed (Windows sometimes throws AccessDeniedException after a file has been deleted)
                     return 0L;
                 }
             } else if (path.getFileName().toString().equals("_state") || path.getFileName().toString().equals("translog")) {
@@ -164,12 +170,22 @@ public class DiskUsageIntegTestCase extends ESIntegTestCase {
                         total += getTotalFileSize(subpath);
                     }
                     return total;
-                } catch (NotDirectoryException | NoSuchFileException | FileNotFoundException e) {
-                    // probably removed
-                    return 0L;
+                } catch (IOException | DirectoryIteratorException e) {
+                    if (isFileNotFoundException(e) || e instanceof AccessDeniedException) {
+                        // probably removed (Windows sometimes throws AccessDeniedException after a file has been deleted)
+                        return 0L;
+                    }
+                    throw e;
                 }
             }
         }
+    }
+
+    private static boolean isFileNotFoundException(Exception e) {
+        if (e instanceof DirectoryIteratorException) {
+            e = ((DirectoryIteratorException) e).getCause();
+        }
+        return e instanceof NotDirectoryException || e instanceof NoSuchFileException || e instanceof FileNotFoundException;
     }
 
     private static class TestFileSystemProvider extends FilterFileSystemProvider {
@@ -207,9 +223,9 @@ public class DiskUsageIntegTestCase extends ESIntegTestCase {
                 return fileStore;
             }
 
-            // On Linux, and only Linux, Lucene obtains a filestore for the index in order to determine whether it's on a spinning disk or
-            // not so it can configure the merge scheduler accordingly
-            assertTrue(path + " not tracked and not on Linux", Constants.LINUX);
+            // We check the total size available for translog in InternalEngine constructor and we allow that here,
+            // expecting to match a unique root path.
+            assertTrue(path + " not tracked and not translog", path.getFileName().toString().equals("translog"));
             final Set<Path> containingPaths = trackedPaths.keySet().stream().filter(path::startsWith).collect(Collectors.toSet());
             assertThat(path + " not contained in a unique tracked path", containingPaths, hasSize(1));
             return trackedPaths.get(containingPaths.iterator().next());

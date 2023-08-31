@@ -8,13 +8,13 @@
 
 package org.elasticsearch.repositories;
 
-import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.io.stream.Writeable;
-import org.elasticsearch.common.xcontent.ToXContentFragment;
-import org.elasticsearch.common.xcontent.XContentBuilder;
+import org.elasticsearch.core.Nullable;
+import org.elasticsearch.xcontent.ToXContentFragment;
+import org.elasticsearch.xcontent.XContentBuilder;
 
 import java.io.IOException;
 import java.util.Map;
@@ -29,20 +29,18 @@ public final class RepositoryInfo implements Writeable, ToXContentFragment {
     @Nullable
     public final Long stoppedAt;
 
-    public RepositoryInfo(String ephemeralId,
-                          String name,
-                          String type,
-                          Map<String, String> location,
-                          long startedAt) {
+    public RepositoryInfo(String ephemeralId, String name, String type, Map<String, String> location, long startedAt) {
         this(ephemeralId, name, type, location, startedAt, null);
     }
 
-    public RepositoryInfo(String ephemeralId,
-                          String name,
-                          String type,
-                          Map<String, String> location,
-                          long startedAt,
-                          @Nullable Long stoppedAt) {
+    public RepositoryInfo(
+        String ephemeralId,
+        String name,
+        String type,
+        Map<String, String> location,
+        long startedAt,
+        @Nullable Long stoppedAt
+    ) {
         this.ephemeralId = ephemeralId;
         this.name = name;
         this.type = type;
@@ -58,7 +56,7 @@ public final class RepositoryInfo implements Writeable, ToXContentFragment {
         this.ephemeralId = in.readString();
         this.name = in.readString();
         this.type = in.readString();
-        this.location = in.readMap(StreamInput::readString, StreamInput::readString);
+        this.location = in.readMap(StreamInput::readString);
         this.startedAt = in.readLong();
         this.stoppedAt = in.readOptionalLong();
     }
@@ -101,12 +99,12 @@ public final class RepositoryInfo implements Writeable, ToXContentFragment {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         RepositoryInfo that = (RepositoryInfo) o;
-        return ephemeralId.equals(that.ephemeralId) &&
-            name.equals(that.name) &&
-            type.equals(that.type) &&
-            location.equals(that.location) &&
-            startedAt == that.startedAt &&
-            Objects.equals(stoppedAt, that.stoppedAt);
+        return ephemeralId.equals(that.ephemeralId)
+            && name.equals(that.name)
+            && type.equals(that.type)
+            && location.equals(that.location)
+            && startedAt == that.startedAt
+            && Objects.equals(stoppedAt, that.stoppedAt);
     }
 
     @Override

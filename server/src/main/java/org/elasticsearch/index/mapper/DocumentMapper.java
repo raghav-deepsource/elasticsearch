@@ -8,62 +8,51 @@
 
 package org.elasticsearch.index.mapper;
 
-import org.apache.lucene.document.StoredField;
-import org.apache.lucene.util.BytesRef;
-import org.elasticsearch.ElasticsearchGenerationException;
-import org.elasticsearch.common.bytes.BytesArray;
 import org.elasticsearch.common.compress.CompressedXContent;
-import org.elasticsearch.common.xcontent.ToXContent;
-import org.elasticsearch.common.xcontent.XContentType;
 import org.elasticsearch.index.IndexSettings;
-import org.elasticsearch.index.analysis.IndexAnalyzers;
+import org.elasticsearch.index.IndexVersion;
 
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.stream.Stream;
+import java.util.List;
 
 public class DocumentMapper {
     private final String type;
     private final CompressedXContent mappingSource;
-    private final DocumentParser documentParser;
     private final MappingLookup mappingLookup;
-    private final MetadataFieldMapper[] deleteTombstoneMetadataFieldMappers;
-    private final MetadataFieldMapper[] noopTombstoneMetadataFieldMappers;
+    private final DocumentParser documentParser;
 
-    public DocumentMapper(RootObjectMapper.Builder rootBuilder, MapperService mapperService) {
-        this(
-            mapperService.getIndexSettings(),
-            mapperService.getIndexAnalyzers(),
-            mapperService.documentParser(),
-            new Mapping(
-                rootBuilder.build(new ContentPath(1)),
-                mapperService.getMetadataMappers().values().toArray(new MetadataFieldMapper[0]),
-                Collections.emptyMap()));
+    /**
+     * Create a new {@link DocumentMapper} that holds empty mappings.
+     * @param mapperService the mapper service that holds the needed components
+     * @return the newly created document mapper
+     */
+    public static DocumentMapper createEmpty(MapperService mapperService) {
+        RootObjectMapper root = new RootObjectMapper.Builder(MapperService.SINGLE_MAPPING_NAME, ObjectMapper.Defaults.SUBOBJECTS).build(
+            MapperBuilderContext.root(false)
+        );
+        MetadataFieldMapper[] metadata = mapperService.getMetadataMappers().values().toArray(new MetadataFieldMapper[0]);
+        Mapping mapping = new Mapping(root, metadata, null);
+        return new DocumentMapper(mapperService.documentParser(), mapping, mapping.toCompressedXContent(), IndexVersion.current());
     }
 
-    DocumentMapper(IndexSettings indexSettings,
-                   IndexAnalyzers indexAnalyzers,
-                   DocumentParser documentParser,
-                   Mapping mapping) {
-        this.type = mapping.getRoot().name();
+    DocumentMapper(DocumentParser documentParser, Mapping mapping, CompressedXContent source, IndexVersion version) {
         this.documentParser = documentParser;
-        this.mappingLookup = MappingLookup.fromMapping(mapping, documentParser, indexSettings, indexAnalyzers);
+        this.type = mapping.getRoot().name();
+        this.mappingLookup = MappingLookup.fromMapping(mapping);
+        this.mappingSource = source;
 
-        try {
-            mappingSource = new CompressedXContent(mapping, XContentType.JSON, ToXContent.EMPTY_PARAMS);
-        } catch (Exception e) {
-            throw new ElasticsearchGenerationException("failed to serialize source for type [" + type + "]", e);
-        }
+        assert mapping.toCompressedXContent().equals(source) || isSyntheticSourceMalformed(source, version)
+            : "provided source [" + source + "] differs from mapping [" + mapping.toCompressedXContent() + "]";
+    }
 
-        final Collection<String> deleteTombstoneMetadataFields = Arrays.asList(VersionFieldMapper.NAME, IdFieldMapper.NAME,
-            SeqNoFieldMapper.NAME, SeqNoFieldMapper.PRIMARY_TERM_NAME, SeqNoFieldMapper.TOMBSTONE_NAME);
-        this.deleteTombstoneMetadataFieldMappers = Stream.of(mapping.getSortedMetadataMappers())
-            .filter(field -> deleteTombstoneMetadataFields.contains(field.name())).toArray(MetadataFieldMapper[]::new);
-        final Collection<String> noopTombstoneMetadataFields = Arrays.asList(
-            VersionFieldMapper.NAME, SeqNoFieldMapper.NAME, SeqNoFieldMapper.PRIMARY_TERM_NAME, SeqNoFieldMapper.TOMBSTONE_NAME);
-        this.noopTombstoneMetadataFieldMappers = Stream.of(mapping.getSortedMetadataMappers())
-            .filter(field -> noopTombstoneMetadataFields.contains(field.name())).toArray(MetadataFieldMapper[]::new);
+    /**
+     * Indexes built at v.8.7 were missing an explicit entry for synthetic_source.
+     * This got restored in v.8.10 to avoid confusion. The change is only restricted to mapping printout, it has no
+     * functional effect as the synthetic source already applies.
+     */
+    boolean isSyntheticSourceMalformed(CompressedXContent source, IndexVersion version) {
+        return sourceMapper().isSynthetic()
+            && source.string().contains("\"_source\":{\"mode\":\"synthetic\"}") == false
+            && version.onOrBefore(IndexVersion.V_8_10_0);
     }
 
     public Mapping mapping() {
@@ -86,10 +75,6 @@ public class DocumentMapper {
         return metadataMapper(SourceFieldMapper.class);
     }
 
-    public IdFieldMapper idFieldMapper() {
-        return metadataMapper(IdFieldMapper.class);
-    }
-
     public RoutingFieldMapper routingFieldMapper() {
         return metadataMapper(RoutingFieldMapper.class);
     }
@@ -102,36 +87,51 @@ public class DocumentMapper {
         return this.mappingLookup;
     }
 
-    public ParsedDocument parse(SourceToParse source) throws MapperParsingException {
+    public ParsedDocument parse(SourceToParse source) throws DocumentParsingException {
         return documentParser.parseDocument(source, mappingLookup);
-    }
-
-    public ParsedDocument createDeleteTombstoneDoc(String index, String id) throws MapperParsingException {
-        final SourceToParse emptySource = new SourceToParse(index, id, new BytesArray("{}"), XContentType.JSON);
-        return documentParser.parseDocument(emptySource, deleteTombstoneMetadataFieldMappers, mappingLookup).toTombstone();
-    }
-
-    public ParsedDocument createNoopTombstoneDoc(String index, String reason) throws MapperParsingException {
-        final String id = ""; // _id won't be used.
-        final SourceToParse sourceToParse = new SourceToParse(index, id, new BytesArray("{}"), XContentType.JSON);
-        final ParsedDocument parsedDoc = documentParser.parseDocument(sourceToParse, noopTombstoneMetadataFieldMappers, mappingLookup)
-            .toTombstone();
-        // Store the reason of a noop as a raw string in the _source field
-        final BytesRef byteRef = new BytesRef(reason);
-        parsedDoc.rootDoc().add(new StoredField(SourceFieldMapper.NAME, byteRef.bytes, byteRef.offset, byteRef.length));
-        return parsedDoc;
     }
 
     public void validate(IndexSettings settings, boolean checkLimits) {
         this.mapping().validate(this.mappingLookup);
         if (settings.getIndexMetadata().isRoutingPartitionedIndex()) {
             if (routingFieldMapper().required() == false) {
-                throw new IllegalArgumentException("mapping type [" + type() + "] must have routing "
-                    + "required for partitioned index [" + settings.getIndex().getName() + "]");
+                throw new IllegalArgumentException(
+                    "mapping type ["
+                        + type()
+                        + "] must have routing "
+                        + "required for partitioned index ["
+                        + settings.getIndex().getName()
+                        + "]"
+                );
             }
         }
-        if (settings.getIndexSortConfig().hasIndexSort() && mappers().hasNested()) {
+
+        settings.getMode().validateMapping(mappingLookup);
+        /*
+         * Build an empty source loader to validate that the mapping is compatible
+         * with the source loading strategy declared on the source field mapper.
+         */
+        sourceMapper().newSourceLoader(mapping());
+        if (settings.getIndexSortConfig().hasIndexSort() && mappers().nestedLookup() != NestedLookup.EMPTY) {
             throw new IllegalArgumentException("cannot have nested fields when index sort is activated");
+        }
+        List<String> routingPaths = settings.getIndexMetadata().getRoutingPaths();
+        for (String path : routingPaths) {
+            for (String match : mappingLookup.getMatchingFieldNames(path)) {
+                mappingLookup.getFieldType(match).validateMatchedRoutingPath(path);
+            }
+            for (String objectName : mappingLookup.objectMappers().keySet()) {
+                // object type is not allowed in the routing paths
+                if (path.equals(objectName)) {
+                    throw new IllegalArgumentException(
+                        "All fields that match routing_path must be keywords with [time_series_dimension: true] "
+                            + "or flattened fields with a list of dimensions in [time_series_dimensions] "
+                            + "and without the [script] parameter. ["
+                            + objectName
+                            + "] was [object]."
+                    );
+                }
+            }
         }
         if (checkLimits) {
             this.mappingLookup.checkLimits(settings);

@@ -9,12 +9,12 @@ package org.elasticsearch.ingest.geoip;
 
 import com.maxmind.db.NodeCache;
 import com.maxmind.geoip2.model.AbstractResponse;
+
 import org.elasticsearch.common.cache.Cache;
 import org.elasticsearch.common.cache.CacheBuilder;
 
 import java.net.InetAddress;
 import java.nio.file.Path;
-import java.util.Objects;
 import java.util.function.Function;
 
 /**
@@ -26,7 +26,7 @@ import java.util.function.Function;
 final class GeoIpCache {
     private final Cache<CacheKey, AbstractResponse> cache;
 
-    //package private for testing
+    // package private for testing
     GeoIpCache(long maxSize) {
         if (maxSize < 0) {
             throw new IllegalArgumentException("geoip max cache size must be 0 or greater");
@@ -35,22 +35,26 @@ final class GeoIpCache {
     }
 
     @SuppressWarnings("unchecked")
-    <T extends AbstractResponse> T putIfAbsent(InetAddress ip,
-                                               String databasePath,
-                                               Function<InetAddress, AbstractResponse> retrieveFunction) {
+    <T extends AbstractResponse> T putIfAbsent(
+        InetAddress ip,
+        String databasePath,
+        Function<InetAddress, AbstractResponse> retrieveFunction
+    ) {
 
-        //can't use cache.computeIfAbsent due to the elevated permissions for the jackson (run via the cache loader)
+        // can't use cache.computeIfAbsent due to the elevated permissions for the jackson (run via the cache loader)
         CacheKey cacheKey = new CacheKey(ip, databasePath);
-        //intentionally non-locking for simplicity...it's OK if we re-put the same key/value in the cache during a race condition.
+        // intentionally non-locking for simplicity...it's OK if we re-put the same key/value in the cache during a race condition.
         AbstractResponse response = cache.get(cacheKey);
         if (response == null) {
             response = retrieveFunction.apply(ip);
-            cache.put(cacheKey, response);
+            if (response != null) {
+                cache.put(cacheKey, response);
+            }
         }
         return (T) response;
     }
 
-    //only useful for testing
+    // only useful for testing
     AbstractResponse get(InetAddress ip, String databasePath) {
         CacheKey cacheKey = new CacheKey(ip, databasePath);
         return cache.get(cacheKey);
@@ -77,30 +81,5 @@ final class GeoIpCache {
      * path is needed to be included in the cache key. For example, if we only used the IP address as the key the City and ASN the same
      * IP may be in both with different values and we need to cache both.
      */
-    private static class CacheKey {
-
-        private final InetAddress ip;
-        private final String databasePath;
-
-        private CacheKey(InetAddress ip, String databasePath) {
-            this.ip = ip;
-            this.databasePath = databasePath;
-        }
-
-        //generated
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) return true;
-            if (o == null || getClass() != o.getClass()) return false;
-            CacheKey cacheKey = (CacheKey) o;
-            return Objects.equals(ip, cacheKey.ip) &&
-                Objects.equals(databasePath, cacheKey.databasePath);
-        }
-
-        //generated
-        @Override
-        public int hashCode() {
-            return Objects.hash(ip, databasePath);
-        }
-    }
+    private record CacheKey(InetAddress ip, String databasePath) {}
 }

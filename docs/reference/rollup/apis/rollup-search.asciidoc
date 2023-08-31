@@ -1,22 +1,4 @@
-ifdef::permanently-unreleased-branch[]
-
 [role="xpack"]
-[testenv="basic"]
-[[rollup-search]]
-=== Legacy rollup search
-++++
-<titleabbrev>Legacy rollup search</titleabbrev>
-++++
-
-include::put-job.asciidoc[tag=legacy-rollup-admon]
-
-Searches legacy rollup data using <<query-dsl,Query DSL>>.
-
-endif::[]
-ifndef::permanently-unreleased-branch[]
-
-[role="xpack"]
-[testenv="basic"]
 [[rollup-search]]
 === Rollup search
 ++++
@@ -27,7 +9,8 @@ Enables searching rolled-up data using the standard Query DSL.
 
 experimental[]
 
-endif::[]
+NOTE: For version 8.5 and above we recommend <<downsampling,downsampling>> over
+rollups as a way to reduce your storage costs for time series data.
 
 [[rollup-search-request]]
 ==== {api-request-title}

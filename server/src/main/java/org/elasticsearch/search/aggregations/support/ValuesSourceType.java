@@ -55,11 +55,10 @@ public interface ValuesSourceType {
      * Return a {@link ValuesSource} wrapping a field for the given type.  All {@link ValuesSource}s must implement this method.
      *
      * @param fieldContext - The field being wrapped
-     * @param script - Optional script that might be applied over the field
-     * @param context context for the aggregation fetching the field
+     * @param script       - Optional script that might be applied over the field
      * @return - Field specialization of the base {@link ValuesSource}
      */
-    ValuesSource getField(FieldContext fieldContext, AggregationScript.LeafFactory script, AggregationContext context);
+    ValuesSource getField(FieldContext fieldContext, AggregationScript.LeafFactory script);
 
     /**
      * Apply the given missing value to an already-constructed {@link ValuesSource}.  Types which do not support missing values should throw
@@ -71,8 +70,7 @@ public interface ValuesSourceType {
      * @param context - Context for this aggregation used to handle {@link AggregationContext#nowInMillis() "now"}
      * @return - Wrapper over the provided {@link ValuesSource} to apply the given missing value
      */
-    ValuesSource replaceMissing(ValuesSource valuesSource, Object rawMissing, DocValueFormat docValueFormat,
-                                AggregationContext context);
+    ValuesSource replaceMissing(ValuesSource valuesSource, Object rawMissing, DocValueFormat docValueFormat, AggregationContext context);
 
     /**
      * This method provides a hook for specifying a type-specific formatter.  When {@link ValuesSourceConfig} can resolve a
@@ -93,4 +91,15 @@ public interface ValuesSourceType {
      * @return the name of the Values Source Type
      */
     String typeName();
+
+    /**
+     * Returns the exception to throw in case the registry (type, aggregator) entry
+     * is not registered.
+     *
+     * @param message the message for the exception
+     * @return the exception to throw
+     */
+    default RuntimeException getUnregisteredException(String message) {
+        return new IllegalArgumentException(message);
+    }
 }

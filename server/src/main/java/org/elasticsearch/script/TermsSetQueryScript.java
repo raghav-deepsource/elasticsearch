@@ -13,12 +13,13 @@ import org.elasticsearch.common.logging.DeprecationLogger;
 import org.elasticsearch.index.fielddata.ScriptDocValues;
 import org.elasticsearch.search.lookup.LeafSearchLookup;
 import org.elasticsearch.search.lookup.SearchLookup;
-import org.elasticsearch.search.lookup.SourceLookup;
+import org.elasticsearch.search.lookup.Source;
 
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 public abstract class TermsSetQueryScript {
 
@@ -27,21 +28,24 @@ public abstract class TermsSetQueryScript {
     public static final ScriptContext<Factory> CONTEXT = new ScriptContext<>("terms_set", Factory.class);
 
     private static final DeprecationLogger deprecationLogger = DeprecationLogger.getLogger(DynamicMap.class);
-    private static final Map<String, Function<Object, Object>> PARAMS_FUNCTIONS = Map.of(
-            "doc", value -> {
-                deprecationLogger.deprecate(DeprecationCategory.SCRIPTING, "terms-set-query-script_doc",
-                        "Accessing variable [doc] via [params.doc] from within an terms-set-query-script "
-                                + "is deprecated in favor of directly accessing [doc].");
-                return value;
-            },
-            "_doc", value -> {
-                deprecationLogger.deprecate(DeprecationCategory.SCRIPTING, "terms-set-query-script__doc",
-                        "Accessing variable [doc] via [params._doc] from within an terms-set-query-script "
-                                + "is deprecated in favor of directly accessing [doc].");
-                return value;
-            },
-            "_source", value -> ((SourceLookup)value).source()
-    );
+    @SuppressWarnings("unchecked")
+    private static final Map<String, Function<Object, Object>> PARAMS_FUNCTIONS = Map.of("doc", value -> {
+        deprecationLogger.warn(
+            DeprecationCategory.SCRIPTING,
+            "terms-set-query-script_doc",
+            "Accessing variable [doc] via [params.doc] from within an terms-set-query-script "
+                + "is deprecated in favor of directly accessing [doc]."
+        );
+        return value;
+    }, "_doc", value -> {
+        deprecationLogger.warn(
+            DeprecationCategory.SCRIPTING,
+            "terms-set-query-script__doc",
+            "Accessing variable [doc] via [params._doc] from within an terms-set-query-script "
+                + "is deprecated in favor of directly accessing [doc]."
+        );
+        return value;
+    }, "_source", value -> ((Supplier<Source>) value).get().source());
 
     /**
      * The generic runtime parameters for the script.

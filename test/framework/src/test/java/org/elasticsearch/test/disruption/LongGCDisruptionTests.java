@@ -7,8 +7,9 @@
  */
 package org.elasticsearch.test.disruption;
 
-import org.elasticsearch.common.Nullable;
+import org.elasticsearch.core.Nullable;
 import org.elasticsearch.test.ESTestCase;
+import org.junit.BeforeClass;
 
 import java.lang.management.ThreadInfo;
 import java.util.ArrayList;
@@ -40,14 +41,17 @@ public class LongGCDisruptionTests extends ESTestCase {
         }
     }
 
+    @BeforeClass
+    public static void ignoreJdk20Plus() {
+        assumeFalse("jdk20 removed thread suspend/resume", Runtime.version().feature() >= 20);
+    }
+
     public void testBlockingTimeout() throws Exception {
         final String nodeName = "test_node";
         LongGCDisruption disruption = new LongGCDisruption(random(), nodeName) {
             @Override
             protected Pattern[] getUnsafeClasses() {
-                return new Pattern[]{
-                    Pattern.compile(LockedExecutor.class.getSimpleName())
-                };
+                return new Pattern[] { Pattern.compile(LockedExecutor.class.getSimpleName()) };
             }
 
             @Override
@@ -107,9 +111,7 @@ public class LongGCDisruptionTests extends ESTestCase {
         LongGCDisruption disruption = new LongGCDisruption(random(), nodeName) {
             @Override
             protected Pattern[] getUnsafeClasses() {
-                return new Pattern[]{
-                    Pattern.compile(LockedExecutor.class.getSimpleName())
-                };
+                return new Pattern[] { Pattern.compile(LockedExecutor.class.getSimpleName()) };
             }
         };
         final AtomicBoolean stop = new AtomicBoolean();
@@ -222,9 +224,7 @@ public class LongGCDisruptionTests extends ESTestCase {
                 Thread thread = new Thread(() -> {
                     while (stop.get() == false) {
                         if (lockedExec) {
-                            lockedExecutor.executeLocked(() -> {
-                                ops.incrementAndGet();
-                            });
+                            lockedExecutor.executeLocked(() -> { ops.incrementAndGet(); });
                         } else {
                             ops.incrementAndGet();
                         }

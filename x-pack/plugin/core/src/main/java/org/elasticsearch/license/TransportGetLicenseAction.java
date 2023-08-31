@@ -26,11 +26,25 @@ public class TransportGetLicenseAction extends TransportMasterNodeReadAction<Get
     private final LicenseService licenseService;
 
     @Inject
-    public TransportGetLicenseAction(TransportService transportService, ClusterService clusterService,
-                                     LicenseService licenseService, ThreadPool threadPool, ActionFilters actionFilters,
-                                     IndexNameExpressionResolver indexNameExpressionResolver) {
-        super(GetLicenseAction.NAME, transportService, clusterService, threadPool, actionFilters,
-            GetLicenseRequest::new, indexNameExpressionResolver, GetLicenseResponse::new, ThreadPool.Names.MANAGEMENT);
+    public TransportGetLicenseAction(
+        TransportService transportService,
+        ClusterService clusterService,
+        ThreadPool threadPool,
+        ActionFilters actionFilters,
+        IndexNameExpressionResolver indexNameExpressionResolver,
+        LicenseService licenseService
+    ) {
+        super(
+            GetLicenseAction.NAME,
+            transportService,
+            clusterService,
+            threadPool,
+            actionFilters,
+            GetLicenseRequest::new,
+            indexNameExpressionResolver,
+            GetLicenseResponse::new,
+            ThreadPool.Names.SAME
+        );
         this.licenseService = licenseService;
     }
 
@@ -40,8 +54,16 @@ public class TransportGetLicenseAction extends TransportMasterNodeReadAction<Get
     }
 
     @Override
-    protected void masterOperation(Task task, final GetLicenseRequest request, ClusterState state,
-                                   final ActionListener<GetLicenseResponse> listener) throws ElasticsearchException {
-        listener.onResponse(new GetLicenseResponse(licenseService.getLicense()));
+    protected void masterOperation(
+        Task task,
+        final GetLicenseRequest request,
+        ClusterState state,
+        final ActionListener<GetLicenseResponse> listener
+    ) throws ElasticsearchException {
+        if (licenseService instanceof ClusterStateLicenseService clusterStateLicenseService) {
+            listener.onResponse(new GetLicenseResponse(clusterStateLicenseService.getLicense(state.metadata())));
+        } else {
+            listener.onResponse(new GetLicenseResponse(licenseService.getLicense()));
+        }
     }
 }

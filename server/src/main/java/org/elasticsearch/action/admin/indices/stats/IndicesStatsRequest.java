@@ -32,7 +32,7 @@ public class IndicesStatsRequest extends BroadcastRequest<IndicesStatsRequest> {
     private CommonStatsFlags flags = new CommonStatsFlags();
 
     public IndicesStatsRequest() {
-        super((String[])null);
+        super((String[]) null);
     }
 
     public IndicesStatsRequest(StreamInput in) throws IOException {
@@ -251,6 +251,7 @@ public class IndicesStatsRequest extends BroadcastRequest<IndicesStatsRequest> {
         flags.set(Flag.Bulk, bulk);
         return this;
     }
+
     public boolean bulk() {
         return flags.isSet(Flag.Bulk);
     }
@@ -269,15 +270,19 @@ public class IndicesStatsRequest extends BroadcastRequest<IndicesStatsRequest> {
         return this;
     }
 
+    public IndicesStatsRequest denseVector(boolean denseVector) {
+        flags.set(Flag.DenseVector, denseVector);
+        return this;
+    }
+
+    public boolean denseVector() {
+        return flags.isSet(Flag.DenseVector);
+    }
+
     @Override
     public void writeTo(StreamOutput out) throws IOException {
         super.writeTo(out);
         flags.writeTo(out);
-    }
-
-    @Override
-    public boolean includeDataStreams() {
-        return true;
     }
 
     @Override

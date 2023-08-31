@@ -12,7 +12,8 @@ import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.admin.cluster.node.hotthreads.NodeHotThreads;
 import org.elasticsearch.action.admin.cluster.node.hotthreads.NodesHotThreadsRequestBuilder;
 import org.elasticsearch.action.admin.cluster.node.hotthreads.NodesHotThreadsResponse;
-import org.elasticsearch.common.unit.TimeValue;
+import org.elasticsearch.core.TimeValue;
+import org.elasticsearch.monitor.jvm.HotThreads;
 import org.elasticsearch.test.ESIntegTestCase;
 import org.hamcrest.Matcher;
 
@@ -44,7 +45,7 @@ public class HotThreadsIT extends ESIntegTestCase {
         final AtomicBoolean hasErrors = new AtomicBoolean(false);
         for (int i = 0; i < iters; i++) {
             final String type;
-            NodesHotThreadsRequestBuilder nodesHotThreadsRequestBuilder = client().admin().cluster().prepareNodesHotThreads();
+            NodesHotThreadsRequestBuilder nodesHotThreadsRequestBuilder = clusterAdmin().prepareNodesHotThreads();
             if (randomBoolean()) {
                 TimeValue timeValue = new TimeValue(rarely() ? randomIntBetween(500, 5000) : randomIntBetween(20, 500));
                 nodesHotThreadsRequestBuilder.setInterval(timeValue);
@@ -54,19 +55,14 @@ public class HotThreadsIT extends ESIntegTestCase {
             }
             nodesHotThreadsRequestBuilder.setIgnoreIdleThreads(randomBoolean());
             if (randomBoolean()) {
-                switch (randomIntBetween(0, 2)) {
-                    case 2:
-                        type = "cpu";
-                        break;
-                    case 1:
-                        type = "wait";
-                        break;
-                    default:
-                        type = "block";
-                        break;
-                }
+                type = switch (randomIntBetween(0, 3)) {
+                    case 3 -> "mem";
+                    case 2 -> "cpu";
+                    case 1 -> "wait";
+                    default -> "block";
+                };
                 assertThat(type, notNullValue());
-                nodesHotThreadsRequestBuilder.setType(type);
+                nodesHotThreadsRequestBuilder.setType(HotThreads.ReportType.of(type));
             } else {
                 type = null;
             }
@@ -82,7 +78,7 @@ public class HotThreadsIT extends ESIntegTestCase {
                         assertThat(nodesMap.size(), equalTo(cluster().size()));
                         for (NodeHotThreads ht : nodeHotThreads.getNodes()) {
                             assertNotNull(ht.getHotThreads());
-                            //logger.info(ht.getHotThreads());
+                            // logger.info(ht.getHotThreads());
                         }
                         success = true;
                     } finally {
@@ -102,19 +98,24 @@ public class HotThreadsIT extends ESIntegTestCase {
                 }
             });
 
-            indexRandom(true,
-                    client().prepareIndex("test").setId("1").setSource("field1", "value1"),
-                    client().prepareIndex("test").setId("2").setSource("field1", "value2"),
-                    client().prepareIndex("test").setId("3").setSource("field1", "value3"));
+            indexRandom(
+                true,
+                client().prepareIndex("test").setId("1").setSource("field1", "value1"),
+                client().prepareIndex("test").setId("2").setSource("field1", "value2"),
+                client().prepareIndex("test").setId("3").setSource("field1", "value3")
+            );
             ensureSearchable();
-            while(latch.getCount() > 0) {
+            while (latch.getCount() > 0) {
                 assertHitCount(
-                        client().prepareSearch()
-                                .setQuery(matchAllQuery())
-                                .setPostFilter(boolQuery().must(matchAllQuery()).mustNot(boolQuery()
-                                    .must(termQuery("field1", "value1")).must(termQuery("field1", "value2"))))
-                                .get(),
-                        3L);
+                    client().prepareSearch()
+                        .setQuery(matchAllQuery())
+                        .setPostFilter(
+                            boolQuery().must(matchAllQuery())
+                                .mustNot(boolQuery().must(termQuery("field1", "value1")).must(termQuery("field1", "value2")))
+                        )
+                        .get(),
+                    3L
+                );
             }
             latch.await();
             assertThat(hasErrors.get(), is(false));
@@ -125,13 +126,14 @@ public class HotThreadsIT extends ESIntegTestCase {
         assumeTrue("no support for hot_threads on FreeBSD", Constants.FREE_BSD == false);
 
         // First time, don't ignore idle threads:
-        NodesHotThreadsRequestBuilder builder = client().admin().cluster().prepareNodesHotThreads();
+        NodesHotThreadsRequestBuilder builder = clusterAdmin().prepareNodesHotThreads();
         builder.setIgnoreIdleThreads(false);
         builder.setThreads(Integer.MAX_VALUE);
         NodesHotThreadsResponse response = builder.execute().get();
 
-        final Matcher<String> containsCachedTimeThreadRunMethod
-            = containsString("org.elasticsearch.threadpool.ThreadPool$CachedTimeThread.run");
+        final Matcher<String> containsCachedTimeThreadRunMethod = containsString(
+            "org.elasticsearch.threadpool.ThreadPool$CachedTimeThread.run"
+        );
 
         int totSizeAll = 0;
         for (NodeHotThreads node : response.getNodesMap().values()) {
@@ -140,7 +142,7 @@ public class HotThreadsIT extends ESIntegTestCase {
         }
 
         // Second time, do ignore idle threads:
-        builder = client().admin().cluster().prepareNodesHotThreads();
+        builder = clusterAdmin().prepareNodesHotThreads();
         builder.setThreads(Integer.MAX_VALUE);
 
         // Make sure default is true:
@@ -159,7 +161,7 @@ public class HotThreadsIT extends ESIntegTestCase {
 
     public void testTimestampAndParams() throws ExecutionException, InterruptedException {
 
-        NodesHotThreadsResponse response = client().admin().cluster().prepareNodesHotThreads().execute().get();
+        NodesHotThreadsResponse response = clusterAdmin().prepareNodesHotThreads().execute().get();
 
         if (Constants.FREE_BSD) {
             for (NodeHotThreads node : response.getNodesMap().values()) {

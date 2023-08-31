@@ -8,7 +8,7 @@
 package org.elasticsearch.xpack.core.transform.transforms;
 
 import org.elasticsearch.common.io.stream.Writeable.Reader;
-import org.elasticsearch.common.xcontent.XContentParser;
+import org.elasticsearch.xcontent.XContentParser;
 import org.elasticsearch.xpack.core.transform.AbstractSerializingTransformTestCase;
 import org.junit.Before;
 
@@ -64,6 +64,11 @@ public class SourceConfigTests extends AbstractSerializingTransformTestCase<Sour
     @Override
     protected SourceConfig createTestInstance() {
         return lenient ? randomBoolean() ? randomSourceConfig() : randomInvalidSourceConfig() : randomSourceConfig();
+    }
+
+    @Override
+    protected SourceConfig mutateInstance(SourceConfig instance) {
+        return null;// TODO implement https://github.com/elastic/elasticsearch/issues/25929
     }
 
     @Override

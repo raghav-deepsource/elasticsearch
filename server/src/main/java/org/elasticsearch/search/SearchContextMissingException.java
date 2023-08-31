@@ -34,14 +34,14 @@ public class SearchContextMissingException extends ElasticsearchException {
         return RestStatus.NOT_FOUND;
     }
 
-    public SearchContextMissingException(StreamInput in) throws IOException{
+    public SearchContextMissingException(StreamInput in) throws IOException {
         super(in);
         contextId = new ShardSearchContextId(in);
     }
 
     @Override
-    public void writeTo(StreamOutput out) throws IOException {
-        super.writeTo(out);
+    protected void writeTo(StreamOutput out, Writer<Throwable> nestedExceptionsWriter) throws IOException {
+        super.writeTo(out, nestedExceptionsWriter);
         contextId.writeTo(out);
     }
 }

@@ -13,9 +13,10 @@ import org.apache.lucene.search.MatchNoDocsQuery;
 import org.apache.lucene.search.MultiTermQuery;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.util.BytesRef;
-import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.lucene.search.Queries;
 import org.elasticsearch.common.regex.Regex;
+import org.elasticsearch.core.Nullable;
+import org.elasticsearch.index.query.QueryRewriteContext;
 import org.elasticsearch.index.query.SearchExecutionContext;
 
 import java.util.Collection;
@@ -32,11 +33,7 @@ public abstract class ConstantFieldType extends MappedFieldType {
 
     public ConstantFieldType(String name, Map<String, String> meta) {
         super(name, true, false, true, TextSearchInfo.SIMPLE_MATCH_WITHOUT_TERMS, meta);
-    }
-
-    @Override
-    public final boolean isSearchable() {
-        return true;
+        assert isSearchable();
     }
 
     @Override
@@ -48,16 +45,18 @@ public abstract class ConstantFieldType extends MappedFieldType {
      * Return whether the constant value of this field matches the provided {@code pattern}
      * as documented in {@link Regex#simpleMatch}.
      */
-    protected abstract boolean matches(String pattern, boolean caseInsensitive, SearchExecutionContext context);
+    protected abstract boolean matches(String pattern, boolean caseInsensitive, QueryRewriteContext context);
 
     private static String valueToString(Object value) {
-        return value instanceof BytesRef
-                ? ((BytesRef) value).utf8ToString()
-                : value.toString();
+        return value instanceof BytesRef ? ((BytesRef) value).utf8ToString() : value.toString();
     }
 
     @Override
     public final Query termQuery(Object value, SearchExecutionContext context) {
+        return internalTermQuery(value, context);
+    }
+
+    public final Query internalTermQuery(Object value, QueryRewriteContext context) {
         String pattern = valueToString(value);
         if (matches(pattern, false, context)) {
             return Queries.newMatchAllQuery();
@@ -68,6 +67,10 @@ public abstract class ConstantFieldType extends MappedFieldType {
 
     @Override
     public final Query termQueryCaseInsensitive(Object value, SearchExecutionContext context) {
+        return internalTermQueryCaseInsensitive(value, context);
+    }
+
+    public final Query internalTermQueryCaseInsensitive(Object value, QueryRewriteContext context) {
         String pattern = valueToString(value);
         if (matches(pattern, true, context)) {
             return Queries.newMatchAllQuery();
@@ -78,6 +81,10 @@ public abstract class ConstantFieldType extends MappedFieldType {
 
     @Override
     public final Query termsQuery(Collection<?> values, SearchExecutionContext context) {
+        return innerTermsQuery(values, context);
+    }
+
+    public final Query innerTermsQuery(Collection<?> values, QueryRewriteContext context) {
         for (Object value : values) {
             String pattern = valueToString(value);
             if (matches(pattern, false, context)) {
@@ -89,10 +96,16 @@ public abstract class ConstantFieldType extends MappedFieldType {
     }
 
     @Override
-    public final Query prefixQuery(String prefix,
-                             @Nullable MultiTermQuery.RewriteMethod method,
-                             boolean caseInsensitive,
-                             SearchExecutionContext context) {
+    public final Query prefixQuery(
+        String prefix,
+        @Nullable MultiTermQuery.RewriteMethod method,
+        boolean caseInsensitive,
+        SearchExecutionContext context
+    ) {
+        return prefixQuery(prefix, caseInsensitive, context);
+    }
+
+    public final Query prefixQuery(String prefix, boolean caseInsensitive, QueryRewriteContext context) {
         String pattern = prefix + "*";
         if (matches(pattern, caseInsensitive, context)) {
             return Queries.newMatchAllQuery();
@@ -102,10 +115,16 @@ public abstract class ConstantFieldType extends MappedFieldType {
     }
 
     @Override
-    public final Query wildcardQuery(String value,
-                               @Nullable MultiTermQuery.RewriteMethod method,
-                               boolean caseInsensitive,
-                               SearchExecutionContext context) {
+    public final Query wildcardQuery(
+        String value,
+        @Nullable MultiTermQuery.RewriteMethod method,
+        boolean caseInsensitive,
+        SearchExecutionContext context
+    ) {
+        return wildcardQuery(value, caseInsensitive, context);
+    }
+
+    public final Query wildcardQuery(String value, boolean caseInsensitive, QueryRewriteContext context) {
         if (matches(value, caseInsensitive, context)) {
             return Queries.newMatchAllQuery();
         } else {

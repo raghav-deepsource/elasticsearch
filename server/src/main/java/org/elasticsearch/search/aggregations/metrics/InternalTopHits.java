@@ -17,28 +17,37 @@ import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.lucene.Lucene;
 import org.elasticsearch.common.lucene.search.TopDocsAndMaxScore;
-import org.elasticsearch.common.xcontent.XContentBuilder;
+import org.elasticsearch.common.xcontent.ChunkedToXContent;
 import org.elasticsearch.search.SearchHit;
 import org.elasticsearch.search.SearchHits;
+import org.elasticsearch.search.aggregations.AggregationReduceContext;
 import org.elasticsearch.search.aggregations.InternalAggregation;
+import org.elasticsearch.search.aggregations.support.SamplingContext;
+import org.elasticsearch.xcontent.XContentBuilder;
 
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
  * Results of the {@link TopHitsAggregator}.
  */
-public class
-InternalTopHits extends InternalAggregation implements TopHits {
-    private int from;
-    private int size;
-    private TopDocsAndMaxScore topDocs;
-    private SearchHits searchHits;
+public class InternalTopHits extends InternalAggregation implements TopHits {
+    private final int from;
+    private final int size;
+    private final TopDocsAndMaxScore topDocs;
+    private final SearchHits searchHits;
 
-    public InternalTopHits(String name, int from, int size, TopDocsAndMaxScore topDocs, SearchHits searchHits,
-            Map<String, Object> metadata) {
+    public InternalTopHits(
+        String name,
+        int from,
+        int size,
+        TopDocsAndMaxScore topDocs,
+        SearchHits searchHits,
+        Map<String, Object> metadata
+    ) {
         super(name, metadata);
         this.from = from;
         this.size = size;
@@ -88,7 +97,7 @@ InternalTopHits extends InternalAggregation implements TopHits {
     }
 
     @Override
-    public InternalAggregation reduce(List<InternalAggregation> aggregations, ReduceContext reduceContext) {
+    public InternalAggregation reduce(List<InternalAggregation> aggregations, AggregationReduceContext reduceContext) {
         final SearchHits[] shardHits = new SearchHits[aggregations.size()];
         final int from;
         final int size;
@@ -112,16 +121,22 @@ InternalTopHits extends InternalAggregation implements TopHits {
                 InternalTopHits topHitsAgg = (InternalTopHits) aggregations.get(i);
                 shardDocs[i] = topHitsAgg.topDocs.topDocs;
                 shardHits[i] = topHitsAgg.searchHits;
+                for (ScoreDoc doc : shardDocs[i].scoreDocs) {
+                    doc.shardIndex = i;
+                }
             }
-            reducedTopDocs = TopDocs.merge(sort, from, size, (TopFieldDocs[]) shardDocs, true);
+            reducedTopDocs = TopDocs.merge(sort, from, size, (TopFieldDocs[]) shardDocs);
         } else {
             shardDocs = new TopDocs[aggregations.size()];
             for (int i = 0; i < shardDocs.length; i++) {
                 InternalTopHits topHitsAgg = (InternalTopHits) aggregations.get(i);
                 shardDocs[i] = topHitsAgg.topDocs.topDocs;
                 shardHits[i] = topHitsAgg.searchHits;
+                for (ScoreDoc doc : shardDocs[i].scoreDocs) {
+                    doc.shardIndex = i;
+                }
             }
-            reducedTopDocs = TopDocs.merge(from, size, shardDocs, true);
+            reducedTopDocs = TopDocs.merge(from, size, shardDocs);
         }
 
         float maxScore = Float.NaN;
@@ -147,9 +162,19 @@ InternalTopHits extends InternalAggregation implements TopHits {
             hits[i] = shardHits[scoreDoc.shardIndex].getAt(position);
         }
         assert reducedTopDocs.totalHits.relation == Relation.EQUAL_TO;
-        return new InternalTopHits(name, this.from, this.size,
+        return new InternalTopHits(
+            name,
+            this.from,
+            this.size,
             new TopDocsAndMaxScore(reducedTopDocs, maxScore),
-            new SearchHits(hits, reducedTopDocs.totalHits, maxScore), getMetadata());
+            new SearchHits(hits, reducedTopDocs.totalHits, maxScore),
+            getMetadata()
+        );
+    }
+
+    @Override
+    public InternalAggregation finalizeSampling(SamplingContext samplingContext) {
+        return this;
     }
 
     @Override
@@ -157,18 +182,57 @@ InternalTopHits extends InternalAggregation implements TopHits {
         return true;
     }
 
+    // Supported property prefixes.
+    private static final String SOURCE = "_source";
+    private static final String SORT_VALUE = "_sort";
+    private static final String SCORE = "_score";
+
     @Override
     public Object getProperty(List<String> path) {
         if (path.isEmpty()) {
             return this;
-        } else {
-            throw new IllegalArgumentException("path not supported for [" + getName() + "]: " + path);
         }
+        if (path.size() != 1) {
+            throw new IllegalArgumentException(
+                "property paths for top_hits ["
+                    + getName()
+                    + "] can only contain a single field in _source, score or sort values, got "
+                    + path
+            );
+        }
+
+        String[] tokens = path.get(0).toLowerCase(Locale.ROOT).split(":|>|\\.");
+        if (searchHits.getHits().length > 1) {
+            throw new IllegalArgumentException("property paths for top_hits [" + getName() + "] require configuring it with size to 1");
+        }
+        SearchHit topHit = searchHits.getAt(0);
+        if (tokens[0].equals(SORT_VALUE)) {
+            Object[] sortValues = topHit.getSortValues();
+            if (sortValues != null) {
+                if (sortValues.length != 1) {
+                    throw new IllegalArgumentException(
+                        "property path for top_hits [\" + getName() + \"] requires a single sort value, got " + sortValues.length
+                    );
+                }
+                return sortValues[0];
+            }
+        } else if (tokens[0].equals(SCORE)) {
+            return topHit.getScore();
+        } else if (tokens[0].equals(SOURCE)) {
+            Map<String, Object> sourceAsMap = topHit.getSourceAsMap();
+            if (sourceAsMap != null) {
+                Object property = sourceAsMap.get(tokens[1]);
+                if (property != null) {
+                    return property;
+                }
+            }
+        }
+        throw new IllegalArgumentException("path not supported for [" + getName() + "]: " + path);
     }
 
     @Override
     public XContentBuilder doXContentBody(XContentBuilder builder, Params params) throws IOException {
-        searchHits.toXContent(builder, params);
+        ChunkedToXContent.wrapAsToXContent(searchHits).toXContent(builder, params);
         return builder;
     }
 
@@ -190,10 +254,8 @@ InternalTopHits extends InternalAggregation implements TopHits {
             ScoreDoc otherDoc = other.topDocs.topDocs.scoreDocs[d];
             if (thisDoc.doc != otherDoc.doc) return false;
             if (Double.compare(thisDoc.score, otherDoc.score) != 0) return false;
-            if (thisDoc.shardIndex != otherDoc.shardIndex) return false;
-            if (thisDoc instanceof FieldDoc) {
+            if (thisDoc instanceof FieldDoc thisFieldDoc) {
                 if (false == (otherDoc instanceof FieldDoc)) return false;
-                FieldDoc thisFieldDoc = (FieldDoc) thisDoc;
                 FieldDoc otherFieldDoc = (FieldDoc) otherDoc;
                 if (thisFieldDoc.fields.length != otherFieldDoc.fields.length) return false;
                 for (int f = 0; f < thisFieldDoc.fields.length; f++) {
@@ -215,9 +277,7 @@ InternalTopHits extends InternalAggregation implements TopHits {
             ScoreDoc doc = topDocs.topDocs.scoreDocs[d];
             hashCode = 31 * hashCode + doc.doc;
             hashCode = 31 * hashCode + Float.floatToIntBits(doc.score);
-            hashCode = 31 * hashCode + doc.shardIndex;
-            if (doc instanceof FieldDoc) {
-                FieldDoc fieldDoc = (FieldDoc) doc;
+            if (doc instanceof FieldDoc fieldDoc) {
                 hashCode = 31 * hashCode + Arrays.hashCode(fieldDoc.fields);
             }
         }

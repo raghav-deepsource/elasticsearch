@@ -11,17 +11,17 @@ package org.elasticsearch.ingest;
 import org.elasticsearch.ElasticsearchParseException;
 import org.elasticsearch.action.support.master.AcknowledgedResponse;
 import org.elasticsearch.common.bytes.BytesReference;
-import org.elasticsearch.common.xcontent.XContentType;
 import org.elasticsearch.node.NodeService;
 import org.elasticsearch.plugins.Plugin;
 import org.elasticsearch.test.ESIntegTestCase;
+import org.elasticsearch.xcontent.XContentType;
 
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 
-import static org.elasticsearch.common.xcontent.XContentFactory.jsonBuilder;
+import static org.elasticsearch.xcontent.XContentFactory.jsonBuilder;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.is;
@@ -34,14 +34,16 @@ public class IngestProcessorNotInstalledOnAllNodesIT extends ESIntegTestCase {
     private volatile boolean installPlugin;
 
     public IngestProcessorNotInstalledOnAllNodesIT() throws IOException {
-        pipelineSource = BytesReference.bytes(jsonBuilder().startObject()
+        pipelineSource = BytesReference.bytes(
+            jsonBuilder().startObject()
                 .startArray("processors")
-                    .startObject()
-                        .startObject("test")
-                        .endObject()
-                    .endObject()
+                .startObject()
+                .startObject("test")
+                .endObject()
+                .endObject()
                 .endArray()
-                .endObject());
+                .endObject()
+        );
     }
 
     @Override
@@ -58,7 +60,7 @@ public class IngestProcessorNotInstalledOnAllNodesIT extends ESIntegTestCase {
         ensureStableCluster(2, node2);
 
         try {
-            client().admin().cluster().preparePutPipeline("_id", pipelineSource, XContentType.JSON).get();
+            clusterAdmin().preparePutPipeline("_id", pipelineSource, XContentType.JSON).get();
             fail("exception expected");
         } catch (ElasticsearchParseException e) {
             assertThat(e.getMessage(), containsString("Processor type [test] is not installed on node"));
@@ -71,7 +73,7 @@ public class IngestProcessorNotInstalledOnAllNodesIT extends ESIntegTestCase {
         internalCluster().startNode();
 
         try {
-            client().admin().cluster().preparePutPipeline("_id", pipelineSource, XContentType.JSON).get();
+            clusterAdmin().preparePutPipeline("_id", pipelineSource, XContentType.JSON).get();
             fail("exception expected");
         } catch (ElasticsearchParseException e) {
             assertThat(e.getMessage(), equalTo("No processor type exists with name [test]"));
@@ -84,7 +86,7 @@ public class IngestProcessorNotInstalledOnAllNodesIT extends ESIntegTestCase {
         installPlugin = true;
         String node1 = internalCluster().startNode();
 
-        AcknowledgedResponse response = client().admin().cluster().preparePutPipeline("_id", pipelineSource, XContentType.JSON).get();
+        AcknowledgedResponse response = clusterAdmin().preparePutPipeline("_id", pipelineSource, XContentType.JSON).get();
         assertThat(response.isAcknowledged(), is(true));
         Pipeline pipeline = internalCluster().getInstance(NodeService.class, node1).getIngestService().getPipeline("_id");
         assertThat(pipeline, notNullValue());
@@ -95,8 +97,10 @@ public class IngestProcessorNotInstalledOnAllNodesIT extends ESIntegTestCase {
 
         assertNotNull(pipeline);
         assertThat(pipeline.getId(), equalTo("_id"));
-        assertThat(pipeline.getDescription(), equalTo("this is a place holder pipeline, " +
-            "because pipeline with id [_id] could not be loaded"));
+        assertThat(
+            pipeline.getDescription(),
+            equalTo("this is a place holder pipeline, because pipeline with id [_id] could not be loaded")
+        );
     }
 
 }

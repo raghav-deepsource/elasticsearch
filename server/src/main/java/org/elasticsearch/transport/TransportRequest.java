@@ -31,8 +31,12 @@ public abstract class TransportRequest extends TransportMessage implements TaskA
      */
     private TaskId parentTaskId = TaskId.EMPTY_TASK_ID;
 
-    public TransportRequest() {
-    }
+    /**
+     * Request ID. Defaults to -1, meaning "no request ID is set".
+     */
+    private volatile long requestId = -1;
+
+    public TransportRequest() {}
 
     public TransportRequest(StreamInput in) throws IOException {
         parentTaskId = TaskId.readFromStream(in);
@@ -52,6 +56,19 @@ public abstract class TransportRequest extends TransportMessage implements TaskA
     @Override
     public TaskId getParentTask() {
         return parentTaskId;
+    }
+
+    /**
+     * Set the request ID of this request.
+     */
+    @Override
+    public void setRequestId(long requestId) {
+        this.requestId = requestId;
+    }
+
+    @Override
+    public long getRequestId() {
+        return requestId;
     }
 
     @Override

@@ -9,21 +9,24 @@
 package org.elasticsearch.rest.action.admin.cluster;
 
 import org.elasticsearch.action.admin.cluster.snapshots.status.SnapshotsStatusRequest;
-import org.elasticsearch.client.node.NodeClient;
+import org.elasticsearch.client.internal.node.NodeClient;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.rest.BaseRestHandler;
 import org.elasticsearch.rest.RestRequest;
-import org.elasticsearch.rest.action.RestToXContentListener;
+import org.elasticsearch.rest.Scope;
+import org.elasticsearch.rest.ServerlessScope;
+import org.elasticsearch.rest.action.RestCancellableNodeClient;
+import org.elasticsearch.rest.action.RestChunkedToXContentListener;
 
 import java.io.IOException;
 import java.util.List;
 
-import static org.elasticsearch.client.Requests.snapshotsStatusRequest;
 import static org.elasticsearch.rest.RestRequest.Method.GET;
 
 /**
  * Returns status of currently running snapshot
  */
+@ServerlessScope(Scope.INTERNAL)
 public class RestSnapshotsStatusAction extends BaseRestHandler {
 
     @Override
@@ -31,7 +34,8 @@ public class RestSnapshotsStatusAction extends BaseRestHandler {
         return List.of(
             new Route(GET, "/_snapshot/{repository}/{snapshot}/_status"),
             new Route(GET, "/_snapshot/{repository}/_status"),
-            new Route(GET, "/_snapshot/_status"));
+            new Route(GET, "/_snapshot/_status")
+        );
     }
 
     @Override
@@ -46,10 +50,12 @@ public class RestSnapshotsStatusAction extends BaseRestHandler {
         if (snapshots.length == 1 && "_all".equalsIgnoreCase(snapshots[0])) {
             snapshots = Strings.EMPTY_ARRAY;
         }
-        SnapshotsStatusRequest snapshotsStatusRequest = snapshotsStatusRequest(repository).snapshots(snapshots);
+        SnapshotsStatusRequest snapshotsStatusRequest = new SnapshotsStatusRequest(repository).snapshots(snapshots);
         snapshotsStatusRequest.ignoreUnavailable(request.paramAsBoolean("ignore_unavailable", snapshotsStatusRequest.ignoreUnavailable()));
 
         snapshotsStatusRequest.masterNodeTimeout(request.paramAsTime("master_timeout", snapshotsStatusRequest.masterNodeTimeout()));
-        return channel -> client.admin().cluster().snapshotsStatus(snapshotsStatusRequest, new RestToXContentListener<>(channel));
+        return channel -> new RestCancellableNodeClient(client, request.getHttpChannel()).admin()
+            .cluster()
+            .snapshotsStatus(snapshotsStatusRequest, new RestChunkedToXContentListener<>(channel));
     }
 }

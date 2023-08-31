@@ -7,14 +7,14 @@
 
 package org.elasticsearch.xpack.core.security.action;
 
-import org.elasticsearch.Version;
+import org.elasticsearch.TransportVersion;
 import org.elasticsearch.action.ActionResponse;
-import org.elasticsearch.common.ParseField;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
-import org.elasticsearch.common.unit.TimeValue;
-import org.elasticsearch.common.xcontent.ToXContentObject;
-import org.elasticsearch.common.xcontent.XContentBuilder;
+import org.elasticsearch.core.TimeValue;
+import org.elasticsearch.xcontent.ParseField;
+import org.elasticsearch.xcontent.ToXContentObject;
+import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xpack.core.security.authc.Authentication;
 
 import java.io.IOException;
@@ -34,7 +34,7 @@ public final class DelegatePkiAuthenticationResponse extends ActionResponse impl
     private TimeValue expiresIn;
     private Authentication authentication;
 
-    DelegatePkiAuthenticationResponse() { }
+    DelegatePkiAuthenticationResponse() {}
 
     public DelegatePkiAuthenticationResponse(String accessToken, TimeValue expiresIn, Authentication authentication) {
         this.accessToken = Objects.requireNonNull(accessToken);
@@ -47,7 +47,7 @@ public final class DelegatePkiAuthenticationResponse extends ActionResponse impl
         super(input);
         accessToken = input.readString();
         expiresIn = input.readTimeValue();
-        if (input.getVersion().onOrAfter(Version.V_7_11_0)) {
+        if (input.getTransportVersion().onOrAfter(TransportVersion.V_7_11_0)) {
             authentication = new Authentication(input);
         }
     }
@@ -68,7 +68,7 @@ public final class DelegatePkiAuthenticationResponse extends ActionResponse impl
     public void writeTo(StreamOutput out) throws IOException {
         out.writeString(accessToken);
         out.writeTimeValue(expiresIn);
-        if (out.getVersion().onOrAfter(Version.V_7_11_0)) {
+        if (out.getTransportVersion().onOrAfter(TransportVersion.V_7_11_0)) {
             authentication.writeTo(out);
         }
     }
@@ -78,9 +78,9 @@ public final class DelegatePkiAuthenticationResponse extends ActionResponse impl
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         DelegatePkiAuthenticationResponse that = (DelegatePkiAuthenticationResponse) o;
-        return Objects.equals(accessToken, that.accessToken) &&
-            Objects.equals(expiresIn, that.expiresIn) &&
-            Objects.equals(authentication, that.authentication);
+        return Objects.equals(accessToken, that.accessToken)
+            && Objects.equals(expiresIn, that.expiresIn)
+            && Objects.equals(authentication, that.authentication);
     }
 
     @Override

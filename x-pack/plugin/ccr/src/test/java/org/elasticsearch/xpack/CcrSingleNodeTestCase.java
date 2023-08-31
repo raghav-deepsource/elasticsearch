@@ -13,8 +13,8 @@ import org.elasticsearch.action.admin.cluster.settings.ClusterUpdateSettingsRequ
 import org.elasticsearch.action.support.ActiveShardCount;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.common.unit.TimeValue;
-import org.elasticsearch.license.LicenseService;
+import org.elasticsearch.core.TimeValue;
+import org.elasticsearch.license.LicenseSettings;
 import org.elasticsearch.license.LicensesMetadata;
 import org.elasticsearch.plugins.Plugin;
 import org.elasticsearch.test.ESSingleNodeTestCase;
@@ -48,7 +48,7 @@ public abstract class CcrSingleNodeTestCase extends ESSingleNodeTestCase {
         builder.put(XPackSettings.SECURITY_ENABLED.getKey(), false);
         builder.put(XPackSettings.WATCHER_ENABLED.getKey(), false);
         builder.put(XPackSettings.MACHINE_LEARNING_ENABLED.getKey(), false);
-        builder.put(LicenseService.SELF_GENERATED_LICENSE_TYPE.getKey(), "trial");
+        builder.put(LicenseSettings.SELF_GENERATED_LICENSE_TYPE.getKey(), "trial");
         // Let cluster state api return quickly in order to speed up auto follow tests:
         builder.put(CcrSettings.CCR_WAIT_FOR_METADATA_TIMEOUT.getKey(), TimeValue.timeValueMillis(100));
         return builder.build();
@@ -119,8 +119,10 @@ public abstract class CcrSingleNodeTestCase extends ESSingleNodeTestCase {
 
     protected void ensureEmptyWriteBuffers() throws Exception {
         assertBusy(() -> {
-            FollowStatsAction.StatsResponses statsResponses =
-                client().execute(FollowStatsAction.INSTANCE, new FollowStatsAction.StatsRequest()).actionGet();
+            FollowStatsAction.StatsResponses statsResponses = client().execute(
+                FollowStatsAction.INSTANCE,
+                new FollowStatsAction.StatsRequest()
+            ).actionGet();
             for (FollowStatsAction.StatsResponse statsResponse : statsResponses.getStatsResponses()) {
                 ShardFollowNodeTaskStatus status = statsResponse.status();
                 assertThat(status.writeBufferOperationCount(), equalTo(0));

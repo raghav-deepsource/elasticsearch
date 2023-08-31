@@ -11,7 +11,6 @@ import org.elasticsearch.action.admin.cluster.snapshots.restore.RestoreSnapshotR
 import org.elasticsearch.cluster.metadata.IndexMetadata;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.index.IndexSettings;
 import org.elasticsearch.test.ESIntegTestCase;
 import org.elasticsearch.xpack.core.searchablesnapshots.MountSearchableSnapshotAction;
 import org.elasticsearch.xpack.core.searchablesnapshots.MountSearchableSnapshotRequest;
@@ -22,7 +21,7 @@ import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 
 @ESIntegTestCase.ClusterScope(scope = ESIntegTestCase.Scope.TEST)
-public class SearchableSnapshotsSettingValidationIntegTests extends BaseSearchableSnapshotsIntegTestCase {
+public class SearchableSnapshotsSettingValidationIntegTests extends BaseFrozenSearchableSnapshotsIntegTestCase {
 
     private static final String repoName = "test-repo";
     private static final String indexName = "test-index";
@@ -34,15 +33,14 @@ public class SearchableSnapshotsSettingValidationIntegTests extends BaseSearchab
         createIndex(indexName);
         createFullSnapshot(repoName, snapshotName);
 
-        assertAcked(client().admin().indices().prepareDelete(indexName));
+        assertAcked(indicesAdmin().prepareDelete(indexName));
 
-        final Settings.Builder indexSettingsBuilder = Settings.builder().put(IndexSettings.INDEX_CHECK_ON_STARTUP.getKey(), false);
         final MountSearchableSnapshotRequest req = new MountSearchableSnapshotRequest(
             indexName,
             repoName,
             snapshotName,
             indexName,
-            indexSettingsBuilder.build(),
+            Settings.EMPTY,
             Strings.EMPTY_ARRAY,
             true,
             randomFrom(MountSearchableSnapshotRequest.Storage.values())
@@ -56,9 +54,7 @@ public class SearchableSnapshotsSettingValidationIntegTests extends BaseSearchab
     public void testCannotRemoveWriteBlock() {
         final IllegalArgumentException iae = expectThrows(
             IllegalArgumentException.class,
-            () -> client().admin()
-                .indices()
-                .prepareUpdateSettings(indexName)
+            () -> indicesAdmin().prepareUpdateSettings(indexName)
                 .setSettings(Settings.builder().put(IndexMetadata.INDEX_BLOCKS_WRITE_SETTING.getKey(), false))
                 .get()
         );
@@ -69,11 +65,7 @@ public class SearchableSnapshotsSettingValidationIntegTests extends BaseSearchab
         assertNotNull(iae.getCause());
         assertThat(iae.getCause().getMessage(), containsString("Cannot remove write block from searchable snapshot index"));
 
-        client().admin()
-            .indices()
-            .prepareUpdateSettings(indexName)
-            .setSettings(Settings.builder().put(IndexMetadata.INDEX_BLOCKS_WRITE_SETTING.getKey(), true))
-            .get();
+        updateIndexSettings(Settings.builder().put(IndexMetadata.INDEX_BLOCKS_WRITE_SETTING.getKey(), true), indexName);
     }
 
 }

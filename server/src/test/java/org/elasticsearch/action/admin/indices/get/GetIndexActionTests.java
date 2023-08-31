@@ -24,6 +24,7 @@ import org.elasticsearch.common.util.concurrent.ThreadContext;
 import org.elasticsearch.index.Index;
 import org.elasticsearch.indices.EmptySystemIndices;
 import org.elasticsearch.indices.IndicesService;
+import org.elasticsearch.tasks.Task;
 import org.elasticsearch.test.ESSingleNodeTestCase;
 import org.elasticsearch.test.transport.CapturingTransport;
 import org.elasticsearch.threadpool.TestThreadPool;
@@ -52,14 +53,19 @@ public class GetIndexActionTests extends ESSingleNodeTestCase {
     public void setUp() throws Exception {
         super.setUp();
 
-        settingsFilter = new SettingsModule(Settings.EMPTY, emptyList(), emptyList(), emptySet()).getSettingsFilter();
+        settingsFilter = new SettingsModule(Settings.EMPTY, emptyList(), emptyList()).getSettingsFilter();
         threadPool = new TestThreadPool("GetIndexActionTests");
         clusterService = getInstanceFromNode(ClusterService.class);
         indicesService = getInstanceFromNode(IndicesService.class);
         CapturingTransport capturingTransport = new CapturingTransport();
-        transportService = capturingTransport.createTransportService(clusterService.getSettings(), threadPool,
+        transportService = capturingTransport.createTransportService(
+            clusterService.getSettings(),
+            threadPool,
             TransportService.NOOP_TRANSPORT_INTERCEPTOR,
-            boundAddress -> clusterService.localNode(), null, emptySet());
+            boundAddress -> clusterService.localNode(),
+            null,
+            emptySet()
+        );
         transportService.start();
         transportService.acceptIncomingRequests();
         getIndexAction = new GetIndexActionTests.TestTransportGetIndexAction();
@@ -74,41 +80,59 @@ public class GetIndexActionTests extends ESSingleNodeTestCase {
 
     public void testIncludeDefaults() {
         GetIndexRequest defaultsRequest = new GetIndexRequest().indices(indexName).includeDefaults(true);
-        ActionTestUtils.execute(getIndexAction, null, defaultsRequest, ActionListener.wrap(
-            defaultsResponse -> assertNotNull(
-                "index.refresh_interval should be set as we are including defaults",
-                defaultsResponse.getSetting(indexName, "index.refresh_interval")
-            ), exception -> {
-                throw new AssertionError(exception);
-            })
+        ActionTestUtils.execute(
+            getIndexAction,
+            null,
+            defaultsRequest,
+            ActionTestUtils.assertNoFailureListener(
+                defaultsResponse -> assertNotNull(
+                    "index.refresh_interval should be set as we are including defaults",
+                    defaultsResponse.getSetting(indexName, "index.refresh_interval")
+                )
+            )
         );
     }
 
     public void testDoNotIncludeDefaults() {
         GetIndexRequest noDefaultsRequest = new GetIndexRequest().indices(indexName);
-        ActionTestUtils.execute(getIndexAction, null, noDefaultsRequest, ActionListener.wrap(
-            noDefaultsResponse -> assertNull(
-                "index.refresh_interval should be null as it was never set",
-                noDefaultsResponse.getSetting(indexName, "index.refresh_interval")
-            ), exception -> {
-                throw new AssertionError(exception);
-            })
+        ActionTestUtils.execute(
+            getIndexAction,
+            null,
+            noDefaultsRequest,
+            ActionTestUtils.assertNoFailureListener(
+                noDefaultsResponse -> assertNull(
+                    "index.refresh_interval should be null as it was never set",
+                    noDefaultsResponse.getSetting(indexName, "index.refresh_interval")
+                )
+            )
         );
     }
 
     class TestTransportGetIndexAction extends TransportGetIndexAction {
 
         TestTransportGetIndexAction() {
-            super(GetIndexActionTests.this.transportService, GetIndexActionTests.this.clusterService,
-                GetIndexActionTests.this.threadPool, settingsFilter, new ActionFilters(emptySet()),
-                new GetIndexActionTests.Resolver(), indicesService, IndexScopedSettings.DEFAULT_SCOPED_SETTINGS);
+            super(
+                GetIndexActionTests.this.transportService,
+                GetIndexActionTests.this.clusterService,
+                GetIndexActionTests.this.threadPool,
+                settingsFilter,
+                new ActionFilters(emptySet()),
+                new GetIndexActionTests.Resolver(),
+                indicesService,
+                IndexScopedSettings.DEFAULT_SCOPED_SETTINGS
+            );
         }
 
         @Override
-        protected void doMasterOperation(GetIndexRequest request, String[] concreteIndices, ClusterState state,
-                                       ActionListener<GetIndexResponse> listener) {
+        protected void doMasterOperation(
+            Task task,
+            GetIndexRequest request,
+            String[] concreteIndices,
+            ClusterState state,
+            ActionListener<GetIndexResponse> listener
+        ) {
             ClusterState stateWithIndex = ClusterStateCreationUtils.state(indexName, 1, 1);
-            super.doMasterOperation(request, concreteIndices, stateWithIndex, listener);
+            super.doMasterOperation(task, request, concreteIndices, stateWithIndex, listener);
         }
     }
 

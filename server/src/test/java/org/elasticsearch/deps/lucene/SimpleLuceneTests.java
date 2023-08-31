@@ -48,17 +48,17 @@ public class SimpleLuceneTests extends ESTestCase {
         IndexWriter indexWriter = new IndexWriter(dir, new IndexWriterConfig(Lucene.STANDARD_ANALYZER));
         for (int i = 0; i < 10; i++) {
             Document document = new Document();
-            String text = new String(new char[]{(char) (97 + i), (char) (97 + i)});
+            String text = new String(new char[] { (char) (97 + i), (char) (97 + i) });
             document.add(new TextField("str", text, Field.Store.YES));
             document.add(new SortedDocValuesField("str", new BytesRef(text)));
             indexWriter.addDocument(document);
         }
         IndexReader reader = DirectoryReader.open(indexWriter);
-        IndexSearcher searcher = new IndexSearcher(reader);
+        IndexSearcher searcher = newSearcher(reader);
         TopFieldDocs docs = searcher.search(new MatchAllDocsQuery(), 10, new Sort(new SortField("str", SortField.Type.STRING)));
         for (int i = 0; i < 10; i++) {
             FieldDoc fieldDoc = (FieldDoc) docs.scoreDocs[i];
-            assertThat((BytesRef) fieldDoc.fields[0], equalTo(new BytesRef(new String(new char[]{(char) (97 + i), (char) (97 + i)}))));
+            assertThat((BytesRef) fieldDoc.fields[0], equalTo(new BytesRef(new String(new char[] { (char) (97 + i), (char) (97 + i) }))));
         }
     }
 
@@ -73,7 +73,7 @@ public class SimpleLuceneTests extends ESTestCase {
         indexWriter.addDocument(document);
 
         IndexReader reader = DirectoryReader.open(indexWriter);
-        IndexSearcher searcher = new IndexSearcher(reader);
+        IndexSearcher searcher = newSearcher(reader);
         TopDocs topDocs = searcher.search(new TermQuery(new Term("_id", "1")), 1);
         Document doc = searcher.doc(topDocs.scoreDocs[0].doc);
         IndexableField f = doc.getField("test");
@@ -102,7 +102,7 @@ public class SimpleLuceneTests extends ESTestCase {
         indexWriter.addDocument(document);
 
         IndexReader reader = DirectoryReader.open(indexWriter);
-        IndexSearcher searcher = new IndexSearcher(reader);
+        IndexSearcher searcher = newSearcher(reader);
         TopDocs topDocs = searcher.search(new TermQuery(new Term("_id", "1")), 1);
         final ArrayList<String> fieldsOrder = new ArrayList<>();
         searcher.doc(topDocs.scoreDocs[0].doc, new StoredFieldVisitor() {

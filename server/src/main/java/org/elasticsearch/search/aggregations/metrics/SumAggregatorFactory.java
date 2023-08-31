@@ -14,6 +14,7 @@ import org.elasticsearch.search.aggregations.AggregatorFactory;
 import org.elasticsearch.search.aggregations.CardinalityUpperBound;
 import org.elasticsearch.search.aggregations.support.AggregationContext;
 import org.elasticsearch.search.aggregations.support.CoreValuesSourceType;
+import org.elasticsearch.search.aggregations.support.TimeSeriesValuesSourceType;
 import org.elasticsearch.search.aggregations.support.ValuesSourceAggregatorFactory;
 import org.elasticsearch.search.aggregations.support.ValuesSourceConfig;
 import org.elasticsearch.search.aggregations.support.ValuesSourceRegistry;
@@ -26,13 +27,15 @@ class SumAggregatorFactory extends ValuesSourceAggregatorFactory {
 
     private final MetricAggregatorSupplier aggregatorSupplier;
 
-    SumAggregatorFactory(String name,
-                            ValuesSourceConfig config,
-                            AggregationContext context,
-                            AggregatorFactory parent,
-                            AggregatorFactories.Builder subFactoriesBuilder,
-                            Map<String, Object> metadata,
-                            MetricAggregatorSupplier aggregatorSupplier) throws IOException {
+    SumAggregatorFactory(
+        String name,
+        ValuesSourceConfig config,
+        AggregationContext context,
+        AggregatorFactory parent,
+        AggregatorFactories.Builder subFactoriesBuilder,
+        Map<String, Object> metadata,
+        MetricAggregatorSupplier aggregatorSupplier
+    ) throws IOException {
         super(name, config, context, parent, subFactoriesBuilder, metadata);
 
         this.aggregatorSupplier = aggregatorSupplier;
@@ -41,23 +44,26 @@ class SumAggregatorFactory extends ValuesSourceAggregatorFactory {
     static void registerAggregators(ValuesSourceRegistry.Builder builder) {
         builder.register(
             SumAggregationBuilder.REGISTRY_KEY,
-            List.of(CoreValuesSourceType.NUMERIC, CoreValuesSourceType.DATE, CoreValuesSourceType.BOOLEAN),
+            List.of(
+                CoreValuesSourceType.NUMERIC,
+                CoreValuesSourceType.DATE,
+                CoreValuesSourceType.BOOLEAN,
+                TimeSeriesValuesSourceType.COUNTER
+            ),
             SumAggregator::new,
-                true);
+            true
+        );
     }
 
     @Override
     protected Aggregator createUnmapped(Aggregator parent, Map<String, Object> metadata) throws IOException {
-        return new SumAggregator(name, config, context, parent, metadata);
+        final Sum empty = Sum.empty(name, config.format(), metadata);
+        return new NonCollectingSingleMetricAggregator(name, context, parent, empty, metadata);
     }
 
     @Override
-    protected Aggregator doCreateInternal(
-        Aggregator parent,
-        CardinalityUpperBound bucketCardinality,
-        Map<String, Object> metadata
-    ) throws IOException {
-        return aggregatorSupplier
-            .build(name, config, context, parent, metadata);
+    protected Aggregator doCreateInternal(Aggregator parent, CardinalityUpperBound bucketCardinality, Map<String, Object> metadata)
+        throws IOException {
+        return aggregatorSupplier.build(name, config, context, parent, metadata);
     }
 }

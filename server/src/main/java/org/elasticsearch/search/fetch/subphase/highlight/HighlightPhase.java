@@ -10,20 +10,21 @@ package org.elasticsearch.search.fetch.subphase.highlight;
 
 import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.search.Query;
-import org.elasticsearch.common.regex.Regex;
 import org.elasticsearch.index.mapper.KeywordFieldMapper;
 import org.elasticsearch.index.mapper.MappedFieldType;
 import org.elasticsearch.index.mapper.TextFieldMapper;
 import org.elasticsearch.search.fetch.FetchContext;
 import org.elasticsearch.search.fetch.FetchSubPhase;
 import org.elasticsearch.search.fetch.FetchSubPhaseProcessor;
+import org.elasticsearch.search.fetch.StoredFieldsSpec;
 
 import java.io.IOException;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 
 public class HighlightPhase implements FetchSubPhase {
@@ -45,8 +46,7 @@ public class HighlightPhase implements FetchSubPhase {
 
     public FetchSubPhaseProcessor getProcessor(FetchContext context, SearchHighlightContext highlightContext, Query query) {
         Map<String, Object> sharedCache = new HashMap<>();
-        Map<String, Function<HitContext, FieldHighlightContext>> contextBuilders = contextBuilders(
-            context, highlightContext, query, sharedCache);
+        FieldContext fieldContext = contextBuilders(context, highlightContext, query, sharedCache);
 
         return new FetchSubPhaseProcessor() {
             @Override
@@ -55,8 +55,14 @@ public class HighlightPhase implements FetchSubPhase {
             }
 
             @Override
+            public StoredFieldsSpec storedFieldsSpec() {
+                return fieldContext.storedFieldsSpec;
+            }
+
+            @Override
             public void process(HitContext hitContext) throws IOException {
                 Map<String, HighlightField> highlightFields = new HashMap<>();
+                Map<String, Function<HitContext, FieldHighlightContext>> contextBuilders = fieldContext.builders;
                 for (String field : contextBuilders.keySet()) {
                     FieldHighlightContext fieldContext = contextBuilders.get(field).apply(hitContext);
                     Highlighter highlighter = getHighlighter(fieldContext.field);
@@ -65,8 +71,7 @@ public class HighlightPhase implements FetchSubPhase {
                         // Note that we make sure to use the original field name in the response. This is because the
                         // original field could be an alias, and highlighter implementations may instead reference the
                         // concrete field it points to.
-                        highlightFields.put(field,
-                            new HighlightField(field, highlightField.fragments()));
+                        highlightFields.put(field, new HighlightField(field, highlightField.fragments()));
                     }
                 }
                 hitContext.hit().highlightFields(highlightFields);
@@ -81,41 +86,34 @@ public class HighlightPhase implements FetchSubPhase {
         }
         Highlighter highlighter = highlighters.get(highlighterType);
         if (highlighter == null) {
-            throw new IllegalArgumentException("unknown highlighter type [" + highlighterType
-                + "] for the field [" + field.field() + "]");
+            throw new IllegalArgumentException("unknown highlighter type [" + highlighterType + "] for the field [" + field.field() + "]");
         }
         return highlighter;
     }
 
-    private Map<String, Function<HitContext, FieldHighlightContext>> contextBuilders(FetchContext context,
-                                                                                     SearchHighlightContext highlightContext,
-                                                                                     Query query,
-                                                                                     Map<String, Object> sharedCache) {
+    private record FieldContext(StoredFieldsSpec storedFieldsSpec, Map<String, Function<HitContext, FieldHighlightContext>> builders) {}
+
+    private FieldContext contextBuilders(
+        FetchContext context,
+        SearchHighlightContext highlightContext,
+        Query query,
+        Map<String, Object> sharedCache
+    ) {
         Map<String, Function<HitContext, FieldHighlightContext>> builders = new LinkedHashMap<>();
+        StoredFieldsSpec storedFieldsSpec = StoredFieldsSpec.NO_REQUIREMENTS;
         for (SearchHighlightContext.Field field : highlightContext.fields()) {
             Highlighter highlighter = getHighlighter(field);
-            Collection<String> fieldNamesToHighlight;
-            if (Regex.isSimpleMatchPattern(field.field())) {
-                fieldNamesToHighlight = context.getSearchExecutionContext().simpleMatchToIndexNames(field.field());
-            } else {
-                fieldNamesToHighlight = Collections.singletonList(field.field());
-            }
 
-            if (highlightContext.forceSource(field)) {
-                if (context.getSearchExecutionContext().isSourceEnabled() == false) {
-                    throw new IllegalArgumentException("source is forced for fields " + fieldNamesToHighlight
-                        + " but _source is disabled");
-                }
-            }
+            Collection<String> fieldNamesToHighlight = context.getSearchExecutionContext().getMatchingFieldNames(field.field());
 
             boolean fieldNameContainsWildcards = field.field().contains("*");
+            Set<String> storedFields = new HashSet<>();
+            boolean sourceRequired = false;
             for (String fieldName : fieldNamesToHighlight) {
                 MappedFieldType fieldType = context.getSearchExecutionContext().getFieldType(fieldName);
-                if (fieldType == null) {
-                    continue;
-                }
 
-                // We should prevent highlighting if a field is anything but a text or keyword field.
+                // We should prevent highlighting if a field is anything but a text, match_only_text,
+                // or keyword field.
                 // However, someone might implement a custom field type that has text and still want to
                 // highlight on that. We cannot know in advance if the highlighter will be able to
                 // highlight such a field and so we do the following:
@@ -124,8 +122,9 @@ public class HighlightPhase implements FetchSubPhase {
                 // If the field was explicitly given we assume that whoever issued the query knew
                 // what they were doing and try to highlight anyway.
                 if (fieldNameContainsWildcards) {
-                    if (fieldType.typeName().equals(TextFieldMapper.CONTENT_TYPE) == false &&
-                        fieldType.typeName().equals(KeywordFieldMapper.CONTENT_TYPE) == false) {
+                    if (fieldType.typeName().equals(TextFieldMapper.CONTENT_TYPE) == false
+                        && fieldType.typeName().equals(KeywordFieldMapper.CONTENT_TYPE) == false
+                        && fieldType.typeName().equals("match_only_text") == false) {
                         continue;
                     }
                     if (highlighter.canHighlight(fieldType) == false) {
@@ -133,14 +132,29 @@ public class HighlightPhase implements FetchSubPhase {
                     }
                 }
 
+                if (fieldType.isStored()) {
+                    storedFields.add(fieldType.name());
+                } else {
+                    sourceRequired = true;
+                }
+
                 Query highlightQuery = field.fieldOptions().highlightQuery();
 
-                boolean forceSource = highlightContext.forceSource(field);
-                builders.put(fieldName,
-                    hc -> new FieldHighlightContext(fieldType.name(), field, fieldType, context, hc,
-                        highlightQuery == null ? query : highlightQuery, forceSource, sharedCache));
+                builders.put(
+                    fieldName,
+                    hc -> new FieldHighlightContext(
+                        fieldType.name(),
+                        field,
+                        fieldType,
+                        context,
+                        hc,
+                        highlightQuery == null ? query : highlightQuery,
+                        sharedCache
+                    )
+                );
             }
+            storedFieldsSpec = storedFieldsSpec.merge(new StoredFieldsSpec(sourceRequired, false, storedFields));
         }
-        return builders;
+        return new FieldContext(storedFieldsSpec, builders);
     }
 }

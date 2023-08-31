@@ -8,7 +8,7 @@
 
 package org.elasticsearch.action.admin.indices.flush;
 
-import org.elasticsearch.Version;
+import org.elasticsearch.TransportVersion;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.ActionType;
 import org.elasticsearch.action.support.ActionFilters;
@@ -32,20 +32,40 @@ import org.elasticsearch.transport.TransportService;
 
 import java.io.IOException;
 
-public class TransportShardFlushAction
-        extends TransportReplicationAction<ShardFlushRequest, ShardFlushRequest, ReplicationResponse> {
+public class TransportShardFlushAction extends TransportReplicationAction<ShardFlushRequest, ShardFlushRequest, ReplicationResponse> {
 
     public static final String NAME = FlushAction.NAME + "[s]";
     public static final ActionType<ReplicationResponse> TYPE = new ActionType<>(NAME, ReplicationResponse::new);
 
     @Inject
-    public TransportShardFlushAction(Settings settings, TransportService transportService, ClusterService clusterService,
-                                     IndicesService indicesService, ThreadPool threadPool, ShardStateAction shardStateAction,
-                                     ActionFilters actionFilters) {
-        super(settings, NAME, transportService, clusterService, indicesService, threadPool, shardStateAction,
-            actionFilters, ShardFlushRequest::new, ShardFlushRequest::new, ThreadPool.Names.FLUSH);
-        transportService.registerRequestHandler(PRE_SYNCED_FLUSH_ACTION_NAME,
-            ThreadPool.Names.FLUSH, PreShardSyncedFlushRequest::new, new PreSyncedFlushTransportHandler(indicesService));
+    public TransportShardFlushAction(
+        Settings settings,
+        TransportService transportService,
+        ClusterService clusterService,
+        IndicesService indicesService,
+        ThreadPool threadPool,
+        ShardStateAction shardStateAction,
+        ActionFilters actionFilters
+    ) {
+        super(
+            settings,
+            NAME,
+            transportService,
+            clusterService,
+            indicesService,
+            threadPool,
+            shardStateAction,
+            actionFilters,
+            ShardFlushRequest::new,
+            ShardFlushRequest::new,
+            ThreadPool.Names.FLUSH
+        );
+        transportService.registerRequestHandler(
+            PRE_SYNCED_FLUSH_ACTION_NAME,
+            ThreadPool.Names.FLUSH,
+            PreShardSyncedFlushRequest::new,
+            new PreSyncedFlushTransportHandler(indicesService)
+        );
     }
 
     @Override
@@ -54,8 +74,11 @@ public class TransportShardFlushAction
     }
 
     @Override
-    protected void shardOperationOnPrimary(ShardFlushRequest shardRequest, IndexShard primary,
-            ActionListener<PrimaryResult<ShardFlushRequest, ReplicationResponse>> listener) {
+    protected void shardOperationOnPrimary(
+        ShardFlushRequest shardRequest,
+        IndexShard primary,
+        ActionListener<PrimaryResult<ShardFlushRequest, ReplicationResponse>> listener
+    ) {
         ActionListener.completeWith(listener, () -> {
             primary.flush(shardRequest.getRequest());
             logger.trace("{} flush request executed on primary", primary.shardId());
@@ -80,7 +103,7 @@ public class TransportShardFlushAction
 
         private PreShardSyncedFlushRequest(StreamInput in) throws IOException {
             super(in);
-            assert in.getVersion().before(Version.V_8_0_0) : "received pre_sync request from a new node";
+            assert in.getTransportVersion().before(TransportVersion.V_8_0_0) : "received pre_sync request from a new node";
             this.shardId = new ShardId(in);
         }
 

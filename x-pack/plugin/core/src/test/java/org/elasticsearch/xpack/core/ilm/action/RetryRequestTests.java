@@ -12,7 +12,6 @@ import org.elasticsearch.common.io.stream.Writeable;
 import org.elasticsearch.test.AbstractWireSerializingTestCase;
 import org.elasticsearch.xpack.core.ilm.action.RetryAction.Request;
 
-import java.io.IOException;
 import java.util.Arrays;
 
 public class RetryRequestTests extends AbstractWireSerializingTestCase<Request> {
@@ -24,8 +23,16 @@ public class RetryRequestTests extends AbstractWireSerializingTestCase<Request> 
             request.indices(generateRandomStringArray(20, 20, false));
         }
         if (randomBoolean()) {
-            IndicesOptions indicesOptions = IndicesOptions.fromOptions(randomBoolean(), randomBoolean(), randomBoolean(), randomBoolean(),
-                randomBoolean(), randomBoolean(), randomBoolean(), randomBoolean());
+            IndicesOptions indicesOptions = IndicesOptions.fromOptions(
+                randomBoolean(),
+                randomBoolean(),
+                randomBoolean(),
+                randomBoolean(),
+                randomBoolean(),
+                randomBoolean(),
+                randomBoolean(),
+                randomBoolean()
+            );
             request.indicesOptions(indicesOptions);
         }
         return request;
@@ -37,20 +44,28 @@ public class RetryRequestTests extends AbstractWireSerializingTestCase<Request> 
     }
 
     @Override
-    protected Request mutateInstance(Request instance) throws IOException {
+    protected Request mutateInstance(Request instance) {
         String[] indices = instance.indices();
         IndicesOptions indicesOptions = instance.indicesOptions();
         switch (between(0, 1)) {
-            case 0:
-                indices = randomValueOtherThanMany(i -> Arrays.equals(i, instance.indices()),
-                    () -> generateRandomStringArray(20, 10, false, true));
-                break;
-            case 1:
-                indicesOptions = randomValueOtherThan(indicesOptions, () -> IndicesOptions.fromOptions(randomBoolean(), randomBoolean(),
-                    randomBoolean(), randomBoolean(), randomBoolean(), randomBoolean(), randomBoolean(), randomBoolean()));
-                break;
-            default:
-                throw new AssertionError("Illegal randomisation branch");
+            case 0 -> indices = randomValueOtherThanMany(
+                i -> Arrays.equals(i, instance.indices()),
+                () -> generateRandomStringArray(20, 10, false, true)
+            );
+            case 1 -> indicesOptions = randomValueOtherThan(
+                indicesOptions,
+                () -> IndicesOptions.fromOptions(
+                    randomBoolean(),
+                    randomBoolean(),
+                    randomBoolean(),
+                    randomBoolean(),
+                    randomBoolean(),
+                    randomBoolean(),
+                    randomBoolean(),
+                    randomBoolean()
+                )
+            );
+            default -> throw new AssertionError("Illegal randomisation branch");
         }
         Request newRequest = new Request();
         newRequest.indices(indices);

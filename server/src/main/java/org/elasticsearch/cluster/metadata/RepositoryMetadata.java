@@ -59,8 +59,8 @@ public class RepositoryMetadata implements Writeable {
         this.settings = settings;
         this.generation = generation;
         this.pendingGeneration = pendingGeneration;
-        assert generation <= pendingGeneration :
-            "Pending generation [" + pendingGeneration + "] must be greater or equal to generation [" + generation + "]";
+        assert generation <= pendingGeneration
+            : "Pending generation [" + pendingGeneration + "] must be greater or equal to generation [" + generation + "]";
     }
 
     /**
@@ -129,7 +129,7 @@ public class RepositoryMetadata implements Writeable {
 
     public RepositoryMetadata(StreamInput in) throws IOException {
         name = in.readString();
-        if (in.getVersion().onOrAfter(SnapshotsService.UUIDS_IN_REPO_DATA_VERSION)) {
+        if (in.getTransportVersion().onOrAfter(SnapshotsService.UUIDS_IN_REPO_DATA_TRANSPORT_VERSION)) {
             uuid = in.readString();
         } else {
             uuid = RepositoryData.MISSING_UUID;
@@ -148,11 +148,11 @@ public class RepositoryMetadata implements Writeable {
     @Override
     public void writeTo(StreamOutput out) throws IOException {
         out.writeString(name);
-        if (out.getVersion().onOrAfter(SnapshotsService.UUIDS_IN_REPO_DATA_VERSION)) {
+        if (out.getTransportVersion().onOrAfter(SnapshotsService.UUIDS_IN_REPO_DATA_TRANSPORT_VERSION)) {
             out.writeString(uuid);
         }
         out.writeString(type);
-        Settings.writeSettingsToStream(settings, out);
+        settings.writeTo(out);
         out.writeLong(generation);
         out.writeLong(pendingGeneration);
     }
@@ -189,11 +189,30 @@ public class RepositoryMetadata implements Writeable {
 
     @Override
     public String toString() {
-        return "RepositoryMetadata{" + name + "}{" + uuid + "}{" + type + "}{" + settings + "}{"
-                + generation + "}{" + pendingGeneration + "}";
+        return "RepositoryMetadata{"
+            + name
+            + "}{"
+            + uuid
+            + "}{"
+            + type
+            + "}{"
+            + settings
+            + "}{"
+            + generation
+            + "}{"
+            + pendingGeneration
+            + "}";
     }
 
     public RepositoryMetadata withUuid(String uuid) {
+        return new RepositoryMetadata(name, uuid, type, settings, generation, pendingGeneration);
+    }
+
+    public RepositoryMetadata withSettings(Settings settings) {
+        return new RepositoryMetadata(name, uuid, type, settings, generation, pendingGeneration);
+    }
+
+    public RepositoryMetadata withGeneration(long generation, long pendingGeneration) {
         return new RepositoryMetadata(name, uuid, type, settings, generation, pendingGeneration);
     }
 }

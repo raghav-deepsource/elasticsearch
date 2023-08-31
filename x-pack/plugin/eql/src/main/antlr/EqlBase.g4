@@ -24,6 +24,7 @@ query
     : sequence
     | join
     | eventQuery
+    | sample
     ;
 
 sequenceParams
@@ -32,8 +33,13 @@ sequenceParams
 
 sequence
     : SEQUENCE (by=joinKeys sequenceParams? | sequenceParams disallowed=joinKeys?)?
-      sequenceTerm sequenceTerm+
+      sequenceTerm+
       (UNTIL until=sequenceTerm)?
+    ;
+
+sample
+    : SAMPLE (by=joinKeys)?
+      joinTerm+
     ;
 
 join
@@ -56,11 +62,11 @@ joinTerm
    ;
 
 sequenceTerm
-   : subquery (by=joinKeys)?
+   : subquery (by=joinKeys)? (WITH key=IDENTIFIER ASGN value=number)?
    ;
 
 subquery
-    : LB eventFilter RB
+    : (LB | MISSING_EVENT_OPEN) eventFilter RB
     ;
 
 eventQuery
@@ -137,7 +143,7 @@ booleanValue
     ;
 
 qualifiedName
-    : identifier (DOT identifier | LB INTEGER_VALUE+ RB)*
+    : OPTIONAL? identifier (DOT identifier | LB INTEGER_VALUE+ RB)*
     ;
 
 identifier
@@ -174,6 +180,7 @@ OF: 'of';
 OR: 'or';
 REGEX: 'regex';
 REGEX_INSENSITIVE: 'regex~';
+SAMPLE: 'sample';
 SEQUENCE: 'sequence';
 TRUE: 'true';
 UNTIL: 'until';
@@ -204,13 +211,32 @@ RB: ']';
 LP: '(';
 RP: ')';
 PIPE: '|';
+OPTIONAL: '?';
+MISSING_EVENT_OPEN: '![';
+
+fragment STRING_ESCAPE
+    : '\\' [btnfr"'\\]
+    ;
+
+fragment HEX_DIGIT
+    : [0-9abcdefABCDEF]
+    ;
+
+fragment UNICODE_ESCAPE
+    : '\\u' '{' HEX_DIGIT+  '}' // 2-8 hex
+    ;
+
+fragment UNESCAPED_CHARS
+    : ~[\r\n"\\]
+    ;
 
 STRING
-    : '\''  ('\\' [btnfr"'\\] | ~[\r\n'\\])* '\''
-    | '"'   ('\\' [btnfr"'\\] | ~[\r\n"\\])* '"'
+    : '"' (STRING_ESCAPE | UNICODE_ESCAPE | UNESCAPED_CHARS)* '"'
+    | '"""' (~[\r\n])*? '"""' '"'? '"'?
+    // Old style quoting of string, handled as errors in AbstractBuilder
+    | '\''  ('\\' [btnfr"'\\] | ~[\r\n'\\])* '\''
     | '?"'  ('\\"' |~["\r\n])* '"'
     | '?\'' ('\\\'' |~['\r\n])* '\''
-    | '"""' (~[\r\n])*? '"""' '"'? '"'?
     ;
 
 INTEGER_VALUE

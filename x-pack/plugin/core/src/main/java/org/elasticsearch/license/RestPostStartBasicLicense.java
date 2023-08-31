@@ -7,7 +7,8 @@
 
 package org.elasticsearch.license;
 
-import org.elasticsearch.client.node.NodeClient;
+import org.elasticsearch.client.internal.node.NodeClient;
+import org.elasticsearch.core.RestApiVersion;
 import org.elasticsearch.rest.BaseRestHandler;
 import org.elasticsearch.rest.RestRequest;
 import org.elasticsearch.rest.action.RestStatusToXContentListener;
@@ -19,11 +20,13 @@ import static org.elasticsearch.rest.RestRequest.Method.POST;
 
 public class RestPostStartBasicLicense extends BaseRestHandler {
 
-    RestPostStartBasicLicense() {}
+    public RestPostStartBasicLicense() {}
 
     @Override
     public List<Route> routes() {
-        return List.of(new Route(POST, "/_license/start_basic"));
+        return List.of(
+            Route.builder(POST, "/_license/start_basic").replaces(POST, "/_xpack/license/start_basic", RestApiVersion.V_7).build()
+        );
     }
 
     @Override

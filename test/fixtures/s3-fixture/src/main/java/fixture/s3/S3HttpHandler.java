@@ -10,28 +10,29 @@ package fixture.s3;
 import com.sun.net.httpserver.Headers;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
-import org.elasticsearch.common.Nullable;
-import org.elasticsearch.common.SuppressForbidden;
+
+import org.elasticsearch.ExceptionsHelper;
 import org.elasticsearch.common.UUIDs;
-import org.elasticsearch.common.bytes.BytesArray;
 import org.elasticsearch.common.bytes.BytesReference;
-import org.elasticsearch.common.collect.Tuple;
+import org.elasticsearch.common.bytes.CompositeBytesReference;
 import org.elasticsearch.common.hash.MessageDigests;
 import org.elasticsearch.common.io.Streams;
 import org.elasticsearch.common.regex.Regex;
+import org.elasticsearch.core.Nullable;
+import org.elasticsearch.core.SuppressForbidden;
+import org.elasticsearch.core.Tuple;
 import org.elasticsearch.rest.RestStatus;
 import org.elasticsearch.rest.RestUtils;
 
-import java.io.BufferedInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
@@ -40,10 +41,11 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.zip.CheckedInputStream;
-import java.util.zip.Checksum;
+
+import javax.xml.parsers.DocumentBuilderFactory;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static org.w3c.dom.Node.ELEMENT_NODE;
 
 /**
  * Minimal HTTP handler that acts as a S3 compliant server
@@ -55,6 +57,7 @@ public class S3HttpHandler implements HttpHandler {
     private final String path;
 
     private final ConcurrentMap<String, BytesReference> blobs = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, MultipartUpload> uploads = new ConcurrentHashMap<>();
 
     public S3HttpHandler(final String bucket) {
         this(bucket, null);
@@ -80,15 +83,52 @@ public class S3HttpHandler implements HttpHandler {
                 } else {
                     exchange.sendResponseHeaders(RestStatus.OK.getStatus(), -1);
                 }
+            } else if (Regex.simpleMatch("GET /" + bucket + "/?uploads&prefix=*", request)) {
+                final Map<String, String> params = new HashMap<>();
+                RestUtils.decodeQueryString(exchange.getRequestURI().getQuery(), 0, params);
+
+                final var prefix = params.get("prefix");
+
+                final var uploadsList = new StringBuilder();
+                uploadsList.append("<?xml version='1.0' encoding='UTF-8'?>");
+                uploadsList.append("<ListMultipartUploadsResult xmlns='http://s3.amazonaws.com/doc/2006-03-01/'>");
+                uploadsList.append("<Bucket>").append(bucket).append("</Bucket>");
+                uploadsList.append("<KeyMarker />");
+                uploadsList.append("<UploadIdMarker />");
+                uploadsList.append("<NextKeyMarker>--unused--</NextKeyMarker>");
+                uploadsList.append("<NextUploadIdMarker />");
+                uploadsList.append("<Delimiter />");
+                uploadsList.append("<Prefix>").append(prefix).append("</Prefix>");
+                uploadsList.append("<MaxUploads>10000</MaxUploads>");
+                uploadsList.append("<IsTruncated>false</IsTruncated>");
+
+                for (MultipartUpload value : uploads.values()) {
+                    value.appendXml(uploadsList);
+                }
+
+                uploadsList.append("</ListMultipartUploadsResult>");
+
+                byte[] response = uploadsList.toString().getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().add("Content-Type", "application/xml");
+                exchange.sendResponseHeaders(RestStatus.OK.getStatus(), response.length);
+                exchange.getResponseBody().write(response);
+
             } else if (Regex.simpleMatch("POST /" + path + "/*?uploads", request)) {
-                final String uploadId = UUIDs.randomBase64UUID();
-                byte[] response = ("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" +
-                    "<InitiateMultipartUploadResult>\n" +
-                    "  <Bucket>" + bucket + "</Bucket>\n" +
-                    "  <Key>" + exchange.getRequestURI().getPath() + "</Key>\n" +
-                    "  <UploadId>" + uploadId + "</UploadId>\n" +
-                    "</InitiateMultipartUploadResult>").getBytes(StandardCharsets.UTF_8);
-                blobs.put(multipartKey(uploadId, 0), BytesArray.EMPTY);
+                final var upload = new MultipartUpload(
+                    UUIDs.randomBase64UUID(),
+                    exchange.getRequestURI().getPath().substring(bucket.length() + 2)
+                );
+                uploads.put(upload.getUploadId(), upload);
+
+                final var uploadResult = new StringBuilder();
+                uploadResult.append("<?xml version='1.0' encoding='UTF-8'?>");
+                uploadResult.append("<InitiateMultipartUploadResult>");
+                uploadResult.append("<Bucket>").append(bucket).append("</Bucket>");
+                uploadResult.append("<Key>").append(upload.getPath()).append("</Key>");
+                uploadResult.append("<UploadId>").append(upload.getUploadId()).append("</UploadId>");
+                uploadResult.append("</InitiateMultipartUploadResult>");
+
+                byte[] response = uploadResult.toString().getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().add("Content-Type", "application/xml");
                 exchange.sendResponseHeaders(RestStatus.OK.getStatus(), response.length);
                 exchange.getResponseBody().write(response);
@@ -97,48 +137,45 @@ public class S3HttpHandler implements HttpHandler {
                 final Map<String, String> params = new HashMap<>();
                 RestUtils.decodeQueryString(exchange.getRequestURI().getQuery(), 0, params);
 
-                final String uploadId = params.get("uploadId");
-                if (blobs.containsKey(multipartKey(uploadId, 0))) {
+                final var upload = uploads.get(params.get("uploadId"));
+                if (upload == null) {
+                    exchange.sendResponseHeaders(RestStatus.NOT_FOUND.getStatus(), -1);
+                } else {
                     final Tuple<String, BytesReference> blob = parseRequestBody(exchange);
-                    final int partNumber = Integer.parseInt(params.get("partNumber"));
-                    blobs.put(multipartKey(uploadId, partNumber), blob.v2());
+                    upload.addPart(blob.v1(), blob.v2());
                     exchange.getResponseHeaders().add("ETag", blob.v1());
                     exchange.sendResponseHeaders(RestStatus.OK.getStatus(), -1);
-                } else {
-                    exchange.sendResponseHeaders(RestStatus.NOT_FOUND.getStatus(), -1);
                 }
 
             } else if (Regex.simpleMatch("POST /" + path + "/*?uploadId=*", request)) {
-                Streams.readFully(exchange.getRequestBody());
+
                 final Map<String, String> params = new HashMap<>();
                 RestUtils.decodeQueryString(exchange.getRequestURI().getQuery(), 0, params);
-                final String uploadId = params.get("uploadId");
+                final var upload = uploads.remove(params.get("uploadId"));
+                if (upload == null) {
+                    exchange.sendResponseHeaders(RestStatus.NOT_FOUND.getStatus(), -1);
+                } else {
+                    final var blobContents = upload.complete(extractPartEtags(Streams.readFully(exchange.getRequestBody())));
+                    blobs.put(exchange.getRequestURI().getPath(), blobContents);
 
-                final int nbParts = blobs.keySet().stream()
-                    .filter(blobName -> blobName.startsWith(uploadId))
-                    .map(blobName -> blobName.replaceFirst(uploadId + '\n', ""))
-                    .mapToInt(Integer::parseInt)
-                    .max()
-                    .orElse(0);
-
-                final ByteArrayOutputStream blob = new ByteArrayOutputStream();
-                for (int partNumber = 0; partNumber <= nbParts; partNumber++) {
-                    BytesReference part = blobs.remove(multipartKey(uploadId, partNumber));
-                    if (part == null) {
-                        throw new AssertionError("Upload part is null");
-                    }
-                    part.writeTo(blob);
+                    byte[] response = ("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                        + "<CompleteMultipartUploadResult>\n"
+                        + "<Bucket>"
+                        + bucket
+                        + "</Bucket>\n"
+                        + "<Key>"
+                        + exchange.getRequestURI().getPath()
+                        + "</Key>\n"
+                        + "</CompleteMultipartUploadResult>").getBytes(StandardCharsets.UTF_8);
+                    exchange.getResponseHeaders().add("Content-Type", "application/xml");
+                    exchange.sendResponseHeaders(RestStatus.OK.getStatus(), response.length);
+                    exchange.getResponseBody().write(response);
                 }
-                blobs.put(exchange.getRequestURI().getPath(), new BytesArray(blob.toByteArray()));
-
-                byte[] response = ("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" +
-                    "<CompleteMultipartUploadResult>\n" +
-                    "  <Bucket>" + bucket + "</Bucket>\n" +
-                    "  <Key>" + exchange.getRequestURI().getPath() + "</Key>\n" +
-                    "</CompleteMultipartUploadResult>").getBytes(StandardCharsets.UTF_8);
-                exchange.getResponseHeaders().add("Content-Type", "application/xml");
-                exchange.sendResponseHeaders(RestStatus.OK.getStatus(), response.length);
-                exchange.getResponseBody().write(response);
+            } else if (Regex.simpleMatch("DELETE /" + path + "/*?uploadId=*", request)) {
+                final Map<String, String> params = new HashMap<>();
+                RestUtils.decodeQueryString(exchange.getRequestURI().getQuery(), 0, params);
+                final var upload = uploads.remove(params.get("uploadId"));
+                exchange.sendResponseHeaders((upload == null ? RestStatus.NOT_FOUND : RestStatus.NO_CONTENT).getStatus(), -1);
 
             } else if (Regex.simpleMatch("PUT /" + path + "/*", request)) {
                 final Tuple<String, BytesReference> blob = parseRequestBody(exchange);
@@ -215,8 +252,8 @@ public class S3HttpHandler implements HttpHandler {
 
                         final BytesReference rangeBlob = blob.slice(start, end + 1 - start);
                         exchange.getResponseHeaders().add("Content-Type", "application/octet-stream");
-                        exchange.getResponseHeaders().add("Content-Range", String.format(Locale.ROOT, "bytes %d-%d/%d",
-                            start, end, rangeBlob.length()));
+                        exchange.getResponseHeaders()
+                            .add("Content-Range", String.format(Locale.ROOT, "bytes %d-%d/%d", start, end, rangeBlob.length()));
                         exchange.sendResponseHeaders(RestStatus.OK.getStatus(), rangeBlob.length());
                         rangeBlob.writeTo(exchange.getResponseBody());
                     }
@@ -226,7 +263,7 @@ public class S3HttpHandler implements HttpHandler {
 
             } else if (Regex.simpleMatch("DELETE /" + path + "/*", request)) {
                 int deletions = 0;
-                for (Iterator<Map.Entry<String, BytesReference>> iterator = blobs.entrySet().iterator(); iterator.hasNext(); ) {
+                for (Iterator<Map.Entry<String, BytesReference>> iterator = blobs.entrySet().iterator(); iterator.hasNext();) {
                     Map.Entry<String, BytesReference> blob = iterator.next();
                     if (blob.getKey().startsWith(exchange.getRequestURI().toString())) {
                         iterator.remove();
@@ -241,7 +278,7 @@ public class S3HttpHandler implements HttpHandler {
                 final StringBuilder deletes = new StringBuilder();
                 deletes.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
                 deletes.append("<DeleteResult>");
-                for (Iterator<Map.Entry<String, BytesReference>> iterator = blobs.entrySet().iterator(); iterator.hasNext(); ) {
+                for (Iterator<Map.Entry<String, BytesReference>> iterator = blobs.entrySet().iterator(); iterator.hasNext();) {
                     Map.Entry<String, BytesReference> blob = iterator.next();
                     String key = blob.getKey().replace("/" + bucket + "/", "");
                     if (requestBody.contains("<Key>" + key + "</Key>")) {
@@ -268,108 +305,137 @@ public class S3HttpHandler implements HttpHandler {
         return blobs;
     }
 
-    private static String multipartKey(final String uploadId, int partNumber) {
-        return uploadId + "\n" + partNumber;
-    }
-
-    private static CheckedInputStream createCheckedInputStream(final InputStream inputStream, final MessageDigest digest) {
-        return new CheckedInputStream(inputStream, new Checksum() {
-            @Override
-            public void update(int b) {
-                digest.update((byte) b);
-            }
-
-            @Override
-            public void update(byte[] b, int off, int len) {
-                digest.update(b, off, len);
-            }
-
-            @Override
-            public long getValue() {
-                throw new UnsupportedOperationException();
-            }
-
-            @Override
-            public void reset() {
-                digest.reset();
-            }
-        });
-    }
-
     private static final Pattern chunkSignaturePattern = Pattern.compile("^([0-9a-z]+);chunk-signature=([^\\r\\n]*)$");
 
     private static Tuple<String, BytesReference> parseRequestBody(final HttpExchange exchange) throws IOException {
-        final BytesReference bytesReference;
+        try {
+            final BytesReference bytesReference;
 
-        final String headerDecodedContentLength = exchange.getRequestHeaders().getFirst("x-amz-decoded-content-length");
-        if (headerDecodedContentLength == null) {
-            bytesReference = Streams.readFully(exchange.getRequestBody());
-        } else {
-            BytesReference cc = Streams.readFully(exchange.getRequestBody());
+            final String headerDecodedContentLength = exchange.getRequestHeaders().getFirst("x-amz-decoded-content-length");
+            if (headerDecodedContentLength == null) {
+                bytesReference = Streams.readFully(exchange.getRequestBody());
+            } else {
+                BytesReference requestBody = Streams.readFully(exchange.getRequestBody());
+                int chunkIndex = 0;
+                final List<BytesReference> chunks = new ArrayList<>();
 
-            final ByteArrayOutputStream blob = new ByteArrayOutputStream();
-            try (BufferedInputStream in = new BufferedInputStream(cc.streamInput())) {
-                int chunkSize = 0;
-                int read;
-                while ((read = in.read()) != -1) {
-                    boolean markAndContinue = false;
-                    try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-                        do { // search next consecutive {carriage return, new line} chars and stop
-                            if ((char) read == '\r') {
-                                int next = in.read();
-                                if (next != -1) {
-                                    if (next == '\n') {
-                                        break;
-                                    }
-                                    out.write(read);
-                                    out.write(next);
-                                    continue;
-                                }
-                            }
-                            out.write(read);
-                        } while ((read = in.read()) != -1);
+                while (true) {
+                    chunkIndex += 1;
 
-                        final String line = new String(out.toByteArray(), UTF_8);
-                        if (line.length() == 0 || line.equals("\r\n")) {
-                            markAndContinue = true;
-                        } else {
-                            Matcher matcher = chunkSignaturePattern.matcher(line);
-                            if (matcher.find()) {
-                                markAndContinue = true;
-                                chunkSize = Integer.parseUnsignedInt(matcher.group(1), 16);
-                            }
-                        }
-                        if (markAndContinue) {
-                            in.mark(Integer.MAX_VALUE);
-                            continue;
-                        }
+                    final int headerLength = requestBody.indexOf((byte) '\n', 0) + 1; // includes terminating \r\n
+                    if (headerLength == 0) {
+                        throw new IllegalStateException("header of chunk [" + chunkIndex + "] was not terminated");
                     }
-                    if (chunkSize > 0) {
-                        in.reset();
-                        final byte[] buffer = new byte[chunkSize];
-                        in.read(buffer, 0, buffer.length);
-                        blob.write(buffer);
-                        blob.flush();
-                        chunkSize = 0;
+                    if (headerLength > 150) {
+                        throw new IllegalStateException(
+                            "header of chunk [" + chunkIndex + "] was too long at [" + headerLength + "] bytes"
+                        );
+                    }
+                    if (headerLength < 3) {
+                        throw new IllegalStateException(
+                            "header of chunk [" + chunkIndex + "] was too short at [" + headerLength + "] bytes"
+                        );
+                    }
+                    if (requestBody.get(headerLength - 1) != '\n' || requestBody.get(headerLength - 2) != '\r') {
+                        throw new IllegalStateException("header of chunk [" + chunkIndex + "] not terminated with [\\r\\n]");
+                    }
+
+                    final String header = requestBody.slice(0, headerLength - 2).utf8ToString();
+                    final Matcher matcher = chunkSignaturePattern.matcher(header);
+                    if (matcher.find() == false) {
+                        throw new IllegalStateException(
+                            "header of chunk [" + chunkIndex + "] did not match expected pattern: [" + header + "]"
+                        );
+                    }
+                    final int chunkSize = Integer.parseUnsignedInt(matcher.group(1), 16);
+
+                    if (requestBody.get(headerLength + chunkSize) != '\r' || requestBody.get(headerLength + chunkSize + 1) != '\n') {
+                        throw new IllegalStateException("chunk [" + chunkIndex + "] not terminated with [\\r\\n]");
+                    }
+
+                    if (chunkSize != 0) {
+                        chunks.add(requestBody.slice(headerLength, chunkSize));
+                    }
+
+                    final int toSkip = headerLength + chunkSize + 2;
+                    requestBody = requestBody.slice(toSkip, requestBody.length() - toSkip);
+
+                    if (chunkSize == 0) {
+                        break;
                     }
                 }
-            }
-            if (blob.size() != Integer.parseInt(headerDecodedContentLength)) {
-                throw new IllegalStateException("Something went wrong when parsing the chunked request " +
-                    "[bytes read=" + blob.size() + ", expected=" + headerDecodedContentLength + "]");
-            }
-            bytesReference = new BytesArray(blob.toByteArray());
-        }
 
-        final MessageDigest digest = MessageDigests.md5();
-        Streams.readFully(createCheckedInputStream(bytesReference.streamInput(), digest));
-        return Tuple.tuple(MessageDigests.toHexString(digest.digest()), bytesReference);
+                bytesReference = CompositeBytesReference.of(chunks.toArray(new BytesReference[0]));
+
+                if (bytesReference.length() != Integer.parseInt(headerDecodedContentLength)) {
+                    throw new IllegalStateException(
+                        "Something went wrong when parsing the chunked request "
+                            + "[bytes read="
+                            + bytesReference.length()
+                            + ", expected="
+                            + headerDecodedContentLength
+                            + "]"
+                    );
+                }
+            }
+            return Tuple.tuple(MessageDigests.toHexString(MessageDigests.digest(bytesReference, MessageDigests.md5())), bytesReference);
+        } catch (Exception e) {
+            exchange.sendResponseHeaders(500, 0);
+            try (PrintStream printStream = new PrintStream(exchange.getResponseBody())) {
+                printStream.println(e.toString());
+                e.printStackTrace(printStream);
+            }
+            throw new AssertionError("parseRequestBody failed", e);
+        }
     }
 
-    public static void sendError(final HttpExchange exchange,
-                                 final RestStatus status,
-                                 final String errorCode,
-                                 final String message) throws IOException {
+    static List<String> extractPartEtags(BytesReference completeMultipartUploadBody) {
+        try {
+            final var document = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(completeMultipartUploadBody.streamInput());
+            final var parts = document.getElementsByTagName("Part");
+            final var result = new ArrayList<String>(parts.getLength());
+            for (int partIndex = 0; partIndex < parts.getLength(); partIndex++) {
+                final var part = parts.item(partIndex);
+                String etag = null;
+                int partNumber = -1;
+                final var childNodes = part.getChildNodes();
+                for (int childIndex = 0; childIndex < childNodes.getLength(); childIndex++) {
+                    final var childNode = childNodes.item(childIndex);
+                    if (childNode.getNodeType() == ELEMENT_NODE) {
+                        if (childNode.getNodeName().equals("ETag")) {
+                            etag = childNode.getTextContent();
+                        } else if (childNode.getNodeName().equals("PartNumber")) {
+                            partNumber = Integer.parseInt(childNode.getTextContent()) - 1;
+                        }
+                    }
+                }
+
+                if (etag == null || partNumber == -1) {
+                    throw new IllegalStateException("incomplete part details");
+                }
+
+                while (result.size() <= partNumber) {
+                    result.add(null);
+                }
+
+                if (result.get(partNumber) != null) {
+                    throw new IllegalStateException("duplicate part found");
+                }
+                result.set(partNumber, etag);
+            }
+
+            if (result.stream().anyMatch(Objects::isNull)) {
+                throw new IllegalStateException("missing part");
+            }
+
+            return result;
+        } catch (Exception e) {
+            throw ExceptionsHelper.convertToRuntime(e);
+        }
+    }
+
+    public static void sendError(final HttpExchange exchange, final RestStatus status, final String errorCode, final String message)
+        throws IOException {
         final Headers headers = exchange.getResponseHeaders();
         headers.add("Content-Type", "application/xml");
 
@@ -382,14 +448,24 @@ public class S3HttpHandler implements HttpHandler {
             exchange.sendResponseHeaders(status.getStatus(), -1L);
             exchange.close();
         } else {
-            final byte[] response = ("<?xml version=\"1.0\" encoding=\"UTF-8\"?><Error>" +
-                "<Code>" + errorCode + "</Code>" +
-                "<Message>" + message + "</Message>"
-                + "<RequestId>" + requestId + "</RequestId>"
+            final byte[] response = ("<?xml version=\"1.0\" encoding=\"UTF-8\"?><Error>"
+                + "<Code>"
+                + errorCode
+                + "</Code>"
+                + "<Message>"
+                + message
+                + "</Message>"
+                + "<RequestId>"
+                + requestId
+                + "</RequestId>"
                 + "</Error>").getBytes(StandardCharsets.UTF_8);
             exchange.sendResponseHeaders(status.getStatus(), response.length);
             exchange.getResponseBody().write(response);
             exchange.close();
         }
+    }
+
+    MultipartUpload getUpload(String uploadId) {
+        return uploads.get(uploadId);
     }
 }

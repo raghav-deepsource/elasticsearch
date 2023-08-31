@@ -20,6 +20,28 @@ See <<delete-async-search,delete async search>> API for more informations.
 Privileges to create snapshots for existing repositories. Can also list and view
 details on existing repositories and snapshots.
 
+`cross_cluster_replication`::
+beta:[] Privileges to connect to remote clusters configured with the API key based model
+for cross-cluster replication.
++
+--
+NOTE: This privilege should _not_ be directly granted. It is used internally by
+<<security-api-create-cross-cluster-api-key>> and <<security-api-update-cross-cluster-api-key>>
+to manage cross-cluster API keys.
+
+--
+
+`cross_cluster_search`::
+beta:[] Privileges to connect to remote clusters configured with the API key based model
+for cross-cluster search.
++
+--
+NOTE: This privilege should _not_ be directly granted. It is used internally by
+<<security-api-create-cross-cluster-api-key>> and <<security-api-update-cross-cluster-api-key>>
+to manage cross-cluster API keys.
+
+--
+
 `grant_api_key`::
 Privileges to create {es} API keys on behalf of other users.
 
@@ -30,9 +52,12 @@ obtaining snapshot and restore status. This privilege does not include the
 ability to manage security.
 
 `manage_api_key`::
-All security-related operations on {es} API keys including
+All security-related operations on {es} REST API keys including
 <<security-api-create-api-key,creating new API keys>>,
-<<security-api-get-api-key,retrieving information about API keys>>, and
+<<security-api-get-api-key,retrieving information about API keys>>,
+<<security-api-query-api-key,querying API keys>>,
+<<security-api-update-api-key,updating API key>>,
+<<security-api-bulk-update-api-keys,bulk updating API keys>>, and
 <<security-api-invalidate-api-key,invalidating API keys>>.
 +
 --
@@ -61,7 +86,7 @@ All {Ilm} operations related to managing policies.
 All operations on index templates.
 
 `manage_ingest_pipelines`::
-All operations on ingest node pipelines.
+All operations on ingest pipelines.
 
 `manage_logstash_pipelines`::
 All operations on logstash pipelines.
@@ -89,35 +114,41 @@ to initiate and manage OpenID Connect authentication on behalf of other users.
 All security-related operations on {es} API keys that are owned by the current
 authenticated user. The operations include
 <<security-api-create-api-key,creating new API keys>>,
-<<security-api-get-api-key,retrieving information about API keys>>, and
+<<security-api-get-api-key,retrieving information about API keys>>,
+<<security-api-query-api-key,querying API keys>>,
+<<security-api-update-api-key,updating API key>>,
+<<security-api-bulk-update-api-keys,bulk updating API keys>>, and
 <<security-api-invalidate-api-key,invalidating API keys>>.
 
 `manage_pipeline`::
 All operations on ingest pipelines.
 
-ifdef::permanently-unreleased-branch[]
-
-`manage_rollup`::
-All <<legacy-rollup-apis,legacy rollup>> operations, such as creating, starting,
-stopping, and deleting rollup jobs. This privilege is not required to use the
-{ilm-init} <<ilm-rollup,`rollup`>> action or <<rollup-api,rollup API>>.
-
-endif::[]
-ifndef::permanently-unreleased-branch[]
-
 `manage_rollup`::
 All rollup operations, including creating, starting, stopping and deleting
 rollup jobs.
-
-endif::[]
 
 `manage_saml`::
 Enables the use of internal {es} APIs to initiate and manage SAML authentication
 on behalf of other users.
 
+`manage_search_application`::
+All CRUD operations on <<search-application-apis, search applications>>.
+
+`manage_search_query_rules`::
+All CRUD operations on <<query-rules-apis, query rules>>.
+
+`manage_search_synonyms`::
+All synonyms management operations on <<synonyms-apis>>.
+
 `manage_security`::
 All security-related operations such as CRUD operations on users and roles and
 cache clearing.
+
+`manage_service_account`::
+All security-related operations on {es} service accounts including
+<<security-api-get-service-accounts>>,
+<<security-api-create-service-token>>, <<security-api-delete-service-token>>,
+and <<security-api-get-service-credentials>>.
 
 `manage_slm`::
 All {slm} ({slm-init}) actions, including creating and updating policies and
@@ -129,6 +160,16 @@ Service.
 
 `manage_transform`::
 All operations related to managing {transforms}.
+
+`manage_autoscaling`::
+All operations related to managing autoscaling policies.
+
+`manage_data_frame_transforms`::
+All operations related to managing {transforms}.
+deprecated[7.5] Use `manage_transform` instead.
+
+`manage_enrich`::
+All operations related to managing and executing enrich policies.
 
 `manage_watcher`::
 All watcher operations, such as putting watches, executing, activate or acknowledging.
@@ -149,20 +190,9 @@ node info, node and cluster stats, and pending cluster tasks.
 All read-only {ml} operations, such as getting information about {dfeeds}, jobs,
 model snapshots, or results.
 
-ifdef::permanently-unreleased-branch[]
-
-`monitor_rollup`::
-All read-only operations for legacy rollups, such as viewing the list of
-historical and currently running rollup jobs and their capabilities.
-
-endif::[]
-ifndef::permanently-unreleased-branch[]
-
 `monitor_rollup`::
 All read-only rollup operations, such as viewing the list of historical and
 currently running rollup jobs and their capabilities.
-
-endif::[]
 
 `monitor_snapshot`::
 Privileges to list and view details on existing repositories and snapshots.
@@ -193,9 +223,15 @@ Read-only access to ingest pipline (get, simulate).
 All read-only {slm-init} actions, such as getting policies and checking the
 {slm-init} status.
 
+`read_security`::
+All read-only security-related operations, such as getting users, user profiles,
+{es} API keys, {es} service accounts, roles and role mappings.
+Allows <<security-api-query-api-key,querying>> and <<security-api-get-api-key,retrieving information>>
+on all {es} API keys.
+
 `transport_client`::
-All privileges necessary for a transport client to connect.  Required by the remote
-cluster to enable <<cross-cluster-configuring,{ccs}>>.
+All privileges necessary for a transport client to connect. Required by the remote
+cluster to enable <<remote-clusters,{ccs}>>.
 
 [[privileges-list-indices]]
 ==== Indices privileges
@@ -213,11 +249,16 @@ non-existent index or data stream rather than an explicit
 auto-update of mappings on indices and data streams if they do not contradict
 existing mappings. An auto-update mapping action is the result of an index or
 bulk request on an index or data stream that contains new fields that may
-be mapped rather than an explicit <<indices-put-mapping,put mapping>> request.
+be mapped rather than an explicit <<indices-put-mapping,update mapping>> request.
 
 `create`::
-Privilege to index documents. Also grants access to the update mapping
-action.
+Privilege to index documents.
++
+deprecated:[8.0] Also grants the permission to update the index mapping (but
+not the data streams mapping), using
+the {ref}/indices-put-mapping.html[updating mapping API] or by relying on
+{ref}/dynamic-mapping.html[dynamic field mapping]. In a future major release,
+this privilege will not grant any mapping update permissions.
 +
 --
 NOTE: This privilege does not restrict the index operation to the creation
@@ -228,8 +269,14 @@ privilege for an alternative.
 --
 
 `create_doc`::
-Privilege to index documents. Also grants access to the update mapping action.
-However, it does not enable a user to update existing documents.
+Privilege to index documents.
+It does not grant the permission to update or overwrite existing documents.
++
+deprecated:[8.0] Also grants the permission to update the index mapping (but
+not the data streams mapping), using
+the {ref}/indices-put-mapping.html[updating mapping API] or by relying on
+{ref}/dynamic-mapping.html[dynamic field mapping]. In a future major release,
+this privilege will not grant any mapping update permissions.
 +
 --
 [NOTE]
@@ -253,6 +300,22 @@ aliases to be added to the index once created. In that case the request
 requires the `manage` privilege as well, on both the index and the aliases
 names.
 
+`cross_cluster_replication`::
+beta:[] Privileges to perform cross-cluster replication for indices located on remote clusters
+configured with the API key based model. This privilege should only be used for
+the `privileges` field of <<roles-remote-indices-priv,remote indices privileges>>.
+
+`cross_cluster_replication_internal`::
+beta:[] Privileges to perform supporting actions for cross-cluster replication from remote clusters
+configured with the API key based model.
++
+--
+NOTE: This privilege should _not_ be directly granted. It is used internally by
+<<security-api-create-cross-cluster-api-key>> and <<security-api-update-cross-cluster-api-key>>
+to manage cross-cluster API keys.
+
+--
+
 `delete`::
 Privilege to delete documents.
 
@@ -260,8 +323,13 @@ Privilege to delete documents.
 Privilege to delete an index or data stream.
 
 `index`::
-Privilege to index and update documents. Also grants access to the update
-mapping action.
+Privilege to index and update documents.
++
+deprecated:[8.0] Also grants the permission to update the index mapping (but
+not the data streams mapping), using
+the {ref}/indices-put-mapping.html[updating mapping API] or by relying on
+{ref}/dynamic-mapping.html[dynamic field mapping]. In a future major release,
+this privilege will not grant any mapping update permissions.
 
 `maintenance`::
 Permits refresh, flush, synced flush and force merge index administration operations.
@@ -269,8 +337,8 @@ No privilege to read or write index data or otherwise manage the index.
 
 `manage`::
 All `monitor` privileges plus index and data stream administration (aliases,
-analyze, cache clear, close, delete, exists, flush, mapping, open, field capabilties,
-force merge, refresh, settings, search shards, templates, validate query).
+analyze, cache clear, close, delete, exists, flush, mapping, open, field capabilities,
+force merge, refresh, settings, search shards, validate query).
 
 `manage_follow_index`::
 All actions that are required to manage the lifecycle of a follower index, which
@@ -281,6 +349,12 @@ index. This privilege is necessary only on clusters that contain follower indice
 All {Ilm} operations relating to managing the execution of policies of an index
 or data stream. This includes operations such as retrying policies and removing
 a policy from an index or data stream.
+
+ifeval::["{release-state}"!="released"]
+`manage_data_stream_lifecycle`::
+All data stream lifecycle operations relating to reading and managing the built-in lifecycle of a data stream.
+This includes operations such as adding and removing a lifecycle from a data stream.
+endif::[]
 
 `manage_leader_index`::
 All actions that are required to manage the lifecycle of a leader index, which
@@ -297,7 +371,7 @@ more like this, multi percolate/search/termvector, percolate, scroll,
 clear_scroll, search, suggest, tv).
 
 `read_cross_cluster`::
-Read-only access to the search action from a <<cross-cluster-configuring,remote cluster>>.
+Read-only access to the search action from a <<remote-clusters,remote cluster>>.
 
 `view_index_metadata`::
 Read-only access to index and data stream metadata (aliases, exists,
@@ -308,7 +382,11 @@ This privilege is available for use primarily by {kib} users.
 `write`::
 Privilege to perform all write operations to documents, which includes the
 permission to index, update, and delete documents as well as performing bulk
-operations. Also grants access to the update mapping action.
+operations, while also allowing to dynamically update the index mapping.
++
+deprecated:[8.0] It also grants the permission to update the index mapping (but
+not the data streams mapping), using the {ref}/indices-put-mapping.html[updating mapping API].
+This will be retracted in a future major release.
 
 
 ==== Run as privilege

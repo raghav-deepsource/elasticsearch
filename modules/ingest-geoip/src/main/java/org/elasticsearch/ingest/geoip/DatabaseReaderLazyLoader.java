@@ -11,20 +11,20 @@ package org.elasticsearch.ingest.geoip;
 import com.maxmind.db.NoCache;
 import com.maxmind.db.Reader;
 import com.maxmind.geoip2.DatabaseReader;
-import com.maxmind.geoip2.exception.AddressNotFoundException;
 import com.maxmind.geoip2.model.AbstractResponse;
 import com.maxmind.geoip2.model.AsnResponse;
 import com.maxmind.geoip2.model.CityResponse;
 import com.maxmind.geoip2.model.CountryResponse;
+
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.lucene.util.SetOnce;
-import org.elasticsearch.SpecialPermission;
-import org.elasticsearch.common.Booleans;
 import org.elasticsearch.common.CheckedBiFunction;
 import org.elasticsearch.common.CheckedSupplier;
-import org.elasticsearch.common.SuppressForbidden;
-import org.elasticsearch.core.internal.io.IOUtils;
+import org.elasticsearch.core.Booleans;
+import org.elasticsearch.core.IOUtils;
+import org.elasticsearch.core.Nullable;
+import org.elasticsearch.core.SuppressForbidden;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -33,19 +33,17 @@ import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.security.AccessController;
-import java.security.PrivilegedAction;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Facilitates lazy loading of the database reader, so that when the geoip plugin is installed, but not used,
  * no memory is being wasted on the database reader.
  */
-class DatabaseReaderLazyLoader implements Closeable {
+class DatabaseReaderLazyLoader implements GeoIpDatabase, Closeable {
 
-    private static final boolean LOAD_DATABASE_ON_HEAP =
-        Booleans.parseBoolean(System.getProperty("es.geoip.load_db_on_heap", "false"));
+    private static final boolean LOAD_DATABASE_ON_HEAP = Booleans.parseBoolean(System.getProperty("es.geoip.load_db_on_heap", "false"));
 
     private static final Logger LOGGER = LogManager.getLogger(DatabaseReaderLazyLoader.class);
 
@@ -83,7 +81,8 @@ class DatabaseReaderLazyLoader implements Closeable {
      * @return the database type
      * @throws IOException if an I/O exception occurs reading the database type
      */
-    final String getDatabaseType() throws IOException {
+    @Override
+    public final String getDatabaseType() throws IOException {
         if (databaseType.get() == null) {
             synchronized (databaseType) {
                 if (databaseType.get() == null) {
@@ -91,7 +90,7 @@ class DatabaseReaderLazyLoader implements Closeable {
                     if (fileSize <= 512) {
                         throw new IOException("unexpected file length [" + fileSize + "] for [" + databasePath + "]");
                     }
-                    final int[] databaseTypeMarker = {'d', 'a', 't', 'a', 'b', 'a', 's', 'e', '_', 't', 'y', 'p', 'e'};
+                    final int[] databaseTypeMarker = { 'd', 'a', 't', 'a', 'b', 'a', 's', 'e', '_', 't', 'y', 'p', 'e' };
                     try (InputStream in = databaseInputStream()) {
                         // read the last 512 bytes
                         final long skipped = in.skip(fileSize - 512);
@@ -152,23 +151,30 @@ class DatabaseReaderLazyLoader implements Closeable {
         return Files.newInputStream(databasePath);
     }
 
-    CityResponse getCity(InetAddress ipAddress) {
-        return getResponse(ipAddress, DatabaseReader::city);
+    @Nullable
+    @Override
+    public CityResponse getCity(InetAddress ipAddress) {
+        return getResponse(ipAddress, DatabaseReader::tryCity);
     }
 
-    CountryResponse getCountry(InetAddress ipAddress) {
-        return getResponse(ipAddress, DatabaseReader::country);
+    @Nullable
+    @Override
+    public CountryResponse getCountry(InetAddress ipAddress) {
+        return getResponse(ipAddress, DatabaseReader::tryCountry);
     }
 
-    AsnResponse getAsn(InetAddress ipAddress) {
-        return getResponse(ipAddress, DatabaseReader::asn);
+    @Nullable
+    @Override
+    public AsnResponse getAsn(InetAddress ipAddress) {
+        return getResponse(ipAddress, DatabaseReader::tryAsn);
     }
 
     boolean preLookup() {
         return currentUsages.updateAndGet(current -> current < 0 ? current : current + 1) > 0;
     }
 
-    void postLookup() throws IOException {
+    @Override
+    public void release() throws IOException {
         if (currentUsages.updateAndGet(current -> current > 0 ? current - 1 : current + 1) == -1) {
             doClose();
         }
@@ -178,19 +184,18 @@ class DatabaseReaderLazyLoader implements Closeable {
         return currentUsages.get();
     }
 
-    private <T extends AbstractResponse> T getResponse(InetAddress ipAddress,
-                                                       CheckedBiFunction<DatabaseReader, InetAddress, T, Exception> responseProvider) {
-        SpecialPermission.check();
-        return AccessController.doPrivileged((PrivilegedAction<T>) () ->
-            cache.putIfAbsent(ipAddress, databasePath.toString(), ip -> {
-                try {
-                    return responseProvider.apply(get(), ipAddress);
-                } catch (AddressNotFoundException e) {
-                    throw new GeoIpProcessor.AddressNotFoundRuntimeException(e);
-                } catch (Exception e) {
-                    throw new RuntimeException(e);
-                }
-            }));
+    @Nullable
+    private <T extends AbstractResponse> T getResponse(
+        InetAddress ipAddress,
+        CheckedBiFunction<DatabaseReader, InetAddress, Optional<T>, Exception> responseProvider
+    ) {
+        return cache.putIfAbsent(ipAddress, databasePath.toString(), ip -> {
+            try {
+                return responseProvider.apply(get(), ipAddress).orElse(null);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        });
     }
 
     DatabaseReader get() throws IOException {
@@ -209,8 +214,8 @@ class DatabaseReaderLazyLoader implements Closeable {
         return md5;
     }
 
-    public void close(boolean deleteDatabaseFileOnClose) throws IOException {
-        this.deleteDatabaseFileOnClose = deleteDatabaseFileOnClose;
+    public void close(boolean shouldDeleteDatabaseFileOnClose) throws IOException {
+        this.deleteDatabaseFileOnClose = shouldDeleteDatabaseFileOnClose;
         close();
     }
 
@@ -221,7 +226,8 @@ class DatabaseReaderLazyLoader implements Closeable {
         }
     }
 
-    private void doClose() throws IOException {
+    // Visible for Testing
+    protected void doClose() throws IOException {
         IOUtils.close(databaseReader.get());
         int numEntriesEvicted = cache.purgeCacheEntriesForDatabase(databasePath);
         LOGGER.info("evicted [{}] entries from cache after reloading database [{}]", numEntriesEvicted, databasePath);

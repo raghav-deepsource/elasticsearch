@@ -35,12 +35,16 @@ public class Project extends UnaryPlan {
     }
 
     @Override
-    protected Project replaceChild(LogicalPlan newChild) {
+    public Project replaceChild(LogicalPlan newChild) {
         return new Project(source(), newChild, projections);
     }
 
     public List<? extends NamedExpression> projections() {
         return projections;
+    }
+
+    public Project withProjections(List<? extends NamedExpression> projections) {
+        return new Project(source(), child(), projections);
     }
 
     @Override
@@ -74,7 +78,6 @@ public class Project extends UnaryPlan {
 
         Project other = (Project) obj;
 
-        return Objects.equals(projections, other.projections)
-                && Objects.equals(child(), other.child());
+        return Objects.equals(projections, other.projections) && Objects.equals(child(), other.child());
     }
 }

@@ -9,7 +9,7 @@
 package org.elasticsearch.action.admin.indices.stats;
 
 import org.elasticsearch.action.support.broadcast.BroadcastOperationRequestBuilder;
-import org.elasticsearch.client.ElasticsearchClient;
+import org.elasticsearch.client.internal.ElasticsearchClient;
 
 /**
  * A request to get indices level stats. Allow to enable different stats to be returned.
@@ -20,8 +20,10 @@ import org.elasticsearch.client.ElasticsearchClient;
  * All the stats to be returned can be cleared using {@link #clear()}, at which point, specific
  * stats can be enabled.
  */
-public class IndicesStatsRequestBuilder
-        extends BroadcastOperationRequestBuilder<IndicesStatsRequest, IndicesStatsResponse, IndicesStatsRequestBuilder> {
+public class IndicesStatsRequestBuilder extends BroadcastOperationRequestBuilder<
+    IndicesStatsRequest,
+    IndicesStatsResponse,
+    IndicesStatsRequestBuilder> {
 
     public IndicesStatsRequestBuilder(ElasticsearchClient client, IndicesStatsAction action) {
         super(client, action, new IndicesStatsRequest());
@@ -145,6 +147,16 @@ public class IndicesStatsRequestBuilder
 
     public IndicesStatsRequestBuilder setIncludeSegmentFileSizes(boolean includeSegmentFileSizes) {
         request.includeSegmentFileSizes(includeSegmentFileSizes);
+        return this;
+    }
+
+    public IndicesStatsRequestBuilder setIncludeUnloadedSegments(boolean includeUnloadedSegments) {
+        request.includeUnloadedSegments(includeUnloadedSegments);
+        return this;
+    }
+
+    public IndicesStatsRequestBuilder setDenseVector(boolean denseVector) {
+        request.denseVector(denseVector);
         return this;
     }
 }

@@ -7,6 +7,8 @@
  */
 package org.elasticsearch.cluster.coordination;
 
+import org.elasticsearch.action.ActionListener;
+import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.coordination.CoordinationMetadata.VotingConfiguration;
 import org.elasticsearch.cluster.coordination.CoordinationState.VoteCollection;
 import org.elasticsearch.cluster.node.DiscoveryNode;
@@ -19,27 +21,50 @@ public abstract class ElectionStrategy {
 
     public static final ElectionStrategy DEFAULT_INSTANCE = new ElectionStrategy() {
         @Override
-        protected boolean satisfiesAdditionalQuorumConstraints(DiscoveryNode localNode, long localCurrentTerm, long localAcceptedTerm,
-                                                               long localAcceptedVersion, VotingConfiguration lastCommittedConfiguration,
-                                                               VotingConfiguration lastAcceptedConfiguration, VoteCollection joinVotes) {
+        protected boolean satisfiesAdditionalQuorumConstraints(
+            DiscoveryNode localNode,
+            long localCurrentTerm,
+            long localAcceptedTerm,
+            long localAcceptedVersion,
+            VotingConfiguration lastCommittedConfiguration,
+            VotingConfiguration lastAcceptedConfiguration,
+            VoteCollection joinVotes
+        ) {
             return true;
         }
     };
 
-    protected ElectionStrategy() {
-
-    }
-
     /**
      * Whether there is an election quorum from the point of view of the given local node under the provided voting configurations
      */
-    public final boolean isElectionQuorum(DiscoveryNode localNode, long localCurrentTerm, long localAcceptedTerm, long localAcceptedVersion,
-                                          VotingConfiguration lastCommittedConfiguration, VotingConfiguration lastAcceptedConfiguration,
-                                          VoteCollection joinVotes) {
-        return joinVotes.isQuorum(lastCommittedConfiguration) &&
-            joinVotes.isQuorum(lastAcceptedConfiguration) &&
-            satisfiesAdditionalQuorumConstraints(localNode, localCurrentTerm, localAcceptedTerm, localAcceptedVersion,
-                lastCommittedConfiguration, lastAcceptedConfiguration, joinVotes);
+    public boolean isElectionQuorum(
+        DiscoveryNode localNode,
+        long localCurrentTerm,
+        long localAcceptedTerm,
+        long localAcceptedVersion,
+        VotingConfiguration lastCommittedConfiguration,
+        VotingConfiguration lastAcceptedConfiguration,
+        VoteCollection joinVotes
+    ) {
+        return joinVotes.isQuorum(lastCommittedConfiguration)
+            && joinVotes.isQuorum(lastAcceptedConfiguration)
+            && satisfiesAdditionalQuorumConstraints(
+                localNode,
+                localCurrentTerm,
+                localAcceptedTerm,
+                localAcceptedVersion,
+                lastCommittedConfiguration,
+                lastAcceptedConfiguration,
+                joinVotes
+            );
+    }
+
+    public boolean isPublishQuorum(
+        VoteCollection voteCollection,
+        VotingConfiguration lastCommittedConfiguration,
+        VotingConfiguration latestPublishedConfiguration
+    ) {
+        return voteCollection.isQuorum(lastCommittedConfiguration) && voteCollection.isQuorum(latestPublishedConfiguration);
     }
 
     /**
@@ -53,11 +78,37 @@ public abstract class ElectionStrategy {
      * @param joinVotes                  the votes that were provided so far
      * @return true iff the additional quorum constraints are satisfied
      */
-    protected abstract boolean satisfiesAdditionalQuorumConstraints(DiscoveryNode localNode,
-                                                                    long localCurrentTerm,
-                                                                    long localAcceptedTerm,
-                                                                    long localAcceptedVersion,
-                                                                    VotingConfiguration lastCommittedConfiguration,
-                                                                    VotingConfiguration lastAcceptedConfiguration,
-                                                                    VoteCollection joinVotes);
+    protected abstract boolean satisfiesAdditionalQuorumConstraints(
+        DiscoveryNode localNode,
+        long localCurrentTerm,
+        long localAcceptedTerm,
+        long localAcceptedVersion,
+        VotingConfiguration lastCommittedConfiguration,
+        VotingConfiguration lastAcceptedConfiguration,
+        VoteCollection joinVotes
+    );
+
+    public void onNewElection(DiscoveryNode candidateMasterNode, long proposedTerm, ActionListener<StartJoinRequest> listener) {
+        listener.onResponse(new StartJoinRequest(candidateMasterNode, proposedTerm));
+    }
+
+    public boolean isInvalidReconfiguration(
+        ClusterState clusterState,
+        VotingConfiguration lastAcceptedConfiguration,
+        VotingConfiguration lastCommittedConfiguration
+    ) {
+        return clusterState.getLastAcceptedConfiguration().equals(lastAcceptedConfiguration) == false
+            && lastCommittedConfiguration.equals(lastAcceptedConfiguration) == false;
+    }
+
+    public void beforeCommit(long term, long version, ActionListener<Void> listener) {
+        listener.onResponse(null);
+    }
+
+    public boolean nodeMayWinElection(ClusterState lastAcceptedState, DiscoveryNode node) {
+        final String nodeId = node.getId();
+        return lastAcceptedState.getLastCommittedConfiguration().getNodeIds().contains(nodeId)
+            || lastAcceptedState.getLastAcceptedConfiguration().getNodeIds().contains(nodeId)
+            || lastAcceptedState.getVotingConfigExclusions().stream().noneMatch(vce -> vce.getNodeId().equals(nodeId));
+    }
 }

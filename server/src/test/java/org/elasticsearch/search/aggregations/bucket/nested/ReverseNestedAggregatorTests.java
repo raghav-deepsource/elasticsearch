@@ -11,12 +11,13 @@ package org.elasticsearch.search.aggregations.bucket.nested;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.SortedNumericDocValuesField;
+import org.apache.lucene.document.StringField;
 import org.apache.lucene.index.DirectoryReader;
-import org.apache.lucene.index.IndexReader;
-import org.apache.lucene.index.RandomIndexWriter;
-import org.apache.lucene.search.MatchAllDocsQuery;
+import org.apache.lucene.index.IndexableField;
 import org.apache.lucene.store.Directory;
+import org.apache.lucene.tests.index.RandomIndexWriter;
 import org.elasticsearch.index.mapper.IdFieldMapper;
+import org.elasticsearch.index.mapper.LuceneDocument;
 import org.elasticsearch.index.mapper.MappedFieldType;
 import org.elasticsearch.index.mapper.NestedPathFieldMapper;
 import org.elasticsearch.index.mapper.NumberFieldMapper;
@@ -28,7 +29,7 @@ import org.elasticsearch.search.aggregations.AggregatorTestCase;
 import org.elasticsearch.search.aggregations.InternalAggregation;
 import org.elasticsearch.search.aggregations.bucket.terms.LongTerms;
 import org.elasticsearch.search.aggregations.bucket.terms.TermsAggregationBuilder;
-import org.elasticsearch.search.aggregations.metrics.InternalMax;
+import org.elasticsearch.search.aggregations.metrics.Max;
 import org.elasticsearch.search.aggregations.metrics.MaxAggregationBuilder;
 
 import java.io.IOException;
@@ -54,7 +55,7 @@ public class ReverseNestedAggregatorTests extends AggregatorTestCase {
      * Nested aggregations need the {@linkplain DirectoryReader} wrapped.
      */
     @Override
-    protected IndexReader wrapDirectoryReader(DirectoryReader reader) throws IOException {
+    protected DirectoryReader wrapDirectoryReader(DirectoryReader reader) throws IOException {
         return wrapInMockESDirectoryReader(reader);
     }
 
@@ -63,28 +64,22 @@ public class ReverseNestedAggregatorTests extends AggregatorTestCase {
             try (RandomIndexWriter iw = new RandomIndexWriter(random(), directory)) {
                 // intentionally not writing any docs
             }
-            try (IndexReader indexReader = wrapInMockESDirectoryReader(DirectoryReader.open(directory))) {
-                NestedAggregationBuilder nestedBuilder = new NestedAggregationBuilder(NESTED_AGG,
-                        NESTED_OBJECT);
-                ReverseNestedAggregationBuilder reverseNestedBuilder
-                    = new ReverseNestedAggregationBuilder(REVERSE_AGG_NAME);
+            try (DirectoryReader indexReader = wrapInMockESDirectoryReader(DirectoryReader.open(directory))) {
+                NestedAggregationBuilder nestedBuilder = new NestedAggregationBuilder(NESTED_AGG, NESTED_OBJECT);
+                ReverseNestedAggregationBuilder reverseNestedBuilder = new ReverseNestedAggregationBuilder(REVERSE_AGG_NAME);
                 nestedBuilder.subAggregation(reverseNestedBuilder);
-                MaxAggregationBuilder maxAgg = new MaxAggregationBuilder(MAX_AGG_NAME)
-                        .field(VALUE_FIELD_NAME);
+                MaxAggregationBuilder maxAgg = new MaxAggregationBuilder(MAX_AGG_NAME).field(VALUE_FIELD_NAME);
                 reverseNestedBuilder.subAggregation(maxAgg);
                 MappedFieldType fieldType = new NumberFieldMapper.NumberFieldType(VALUE_FIELD_NAME, NumberFieldMapper.NumberType.LONG);
 
-                Nested nested = searchAndReduce(newSearcher(indexReader, false, true),
-                        new MatchAllDocsQuery(), nestedBuilder, fieldType);
-                ReverseNested reverseNested = (ReverseNested)
-                        ((InternalAggregation)nested).getProperty(REVERSE_AGG_NAME);
+                Nested nested = searchAndReduce(indexReader, new AggTestConfig(nestedBuilder, fieldType));
+                ReverseNested reverseNested = (ReverseNested) ((InternalAggregation) nested).getProperty(REVERSE_AGG_NAME);
                 assertEquals(REVERSE_AGG_NAME, reverseNested.getName());
                 assertEquals(0, reverseNested.getDocCount());
 
-                InternalMax max = (InternalMax)
-                        ((InternalAggregation)reverseNested).getProperty(MAX_AGG_NAME);
+                Max max = (Max) ((InternalAggregation) reverseNested).getProperty(MAX_AGG_NAME);
                 assertEquals(MAX_AGG_NAME, max.getName());
-                assertEquals(Double.NEGATIVE_INFINITY, max.getValue(), Double.MIN_VALUE);
+                assertEquals(Double.NEGATIVE_INFINITY, max.value(), Double.MIN_VALUE);
             }
         }
     }
@@ -97,25 +92,21 @@ public class ReverseNestedAggregatorTests extends AggregatorTestCase {
         try (Directory directory = newDirectory()) {
             try (RandomIndexWriter iw = new RandomIndexWriter(random(), directory)) {
                 for (int i = 0; i < numParentDocs; i++) {
-                    List<Document> documents = new ArrayList<>();
+                    List<Iterable<IndexableField>> documents = new ArrayList<>();
                     int numNestedDocs = randomIntBetween(0, 20);
                     for (int nested = 0; nested < numNestedDocs; nested++) {
                         Document document = new Document();
-                        document.add(new Field(IdFieldMapper.NAME, Uid.encodeId(Integer.toString(i)),
-                                IdFieldMapper.Defaults.NESTED_FIELD_TYPE));
-                        document.add(new Field(NestedPathFieldMapper.NAME, NESTED_OBJECT,
-                            NestedPathFieldMapper.Defaults.FIELD_TYPE));
+                        document.add(new StringField(IdFieldMapper.NAME, Uid.encodeId(Integer.toString(i)), Field.Store.NO));
+                        document.add(new StringField(NestedPathFieldMapper.NAME, NESTED_OBJECT, Field.Store.NO));
                         documents.add(document);
                         expectedNestedDocs++;
                     }
-                    Document document = new Document();
-                    document.add(new Field(IdFieldMapper.NAME, Uid.encodeId(Integer.toString(i)),
-                            IdFieldMapper.Defaults.FIELD_TYPE));
-                    document.add(new Field(NestedPathFieldMapper.NAME, "test",
-                        NestedPathFieldMapper.Defaults.FIELD_TYPE));
+                    LuceneDocument document = new LuceneDocument();
+                    document.add(new StringField(IdFieldMapper.NAME, Uid.encodeId(Integer.toString(i)), Field.Store.YES));
+                    document.add(new StringField(NestedPathFieldMapper.NAME, "test", Field.Store.NO));
                     long value = randomNonNegativeLong() % 10000;
                     document.add(new SortedNumericDocValuesField(VALUE_FIELD_NAME, value));
-                    document.add(SeqNoFieldMapper.SequenceIDFields.emptySeqID().primaryTerm);
+                    SeqNoFieldMapper.SequenceIDFields.emptySeqID().addFields(document);
                     if (numNestedDocs > 0) {
                         expectedMaxValue = Math.max(expectedMaxValue, value);
                         expectedParentDocs++;
@@ -125,30 +116,25 @@ public class ReverseNestedAggregatorTests extends AggregatorTestCase {
                 }
                 iw.commit();
             }
-            try (IndexReader indexReader = wrapInMockESDirectoryReader(DirectoryReader.open(directory))) {
-                NestedAggregationBuilder nestedBuilder = new NestedAggregationBuilder(NESTED_AGG,
-                        NESTED_OBJECT);
-                ReverseNestedAggregationBuilder reverseNestedBuilder
-                    = new ReverseNestedAggregationBuilder(REVERSE_AGG_NAME);
+            try (DirectoryReader indexReader = wrapInMockESDirectoryReader(DirectoryReader.open(directory))) {
+                NestedAggregationBuilder nestedBuilder = new NestedAggregationBuilder(NESTED_AGG, NESTED_OBJECT);
+                ReverseNestedAggregationBuilder reverseNestedBuilder = new ReverseNestedAggregationBuilder(REVERSE_AGG_NAME);
                 nestedBuilder.subAggregation(reverseNestedBuilder);
-                MaxAggregationBuilder maxAgg = new MaxAggregationBuilder(MAX_AGG_NAME)
-                        .field(VALUE_FIELD_NAME);
+                MaxAggregationBuilder maxAgg = new MaxAggregationBuilder(MAX_AGG_NAME).field(VALUE_FIELD_NAME);
                 reverseNestedBuilder.subAggregation(maxAgg);
                 MappedFieldType fieldType = new NumberFieldMapper.NumberFieldType(VALUE_FIELD_NAME, NumberFieldMapper.NumberType.LONG);
 
-                Nested nested = searchAndReduce(newSearcher(indexReader, false, true),
-                        new MatchAllDocsQuery(), nestedBuilder, fieldType);
+                AggTestConfig aggTestConfig = new AggTestConfig(nestedBuilder, fieldType);
+                Nested nested = searchAndReduce(indexReader, aggTestConfig);
                 assertEquals(expectedNestedDocs, nested.getDocCount());
 
-                ReverseNested reverseNested = (ReverseNested)
-                        ((InternalAggregation)nested).getProperty(REVERSE_AGG_NAME);
+                ReverseNested reverseNested = (ReverseNested) ((InternalAggregation) nested).getProperty(REVERSE_AGG_NAME);
                 assertEquals(REVERSE_AGG_NAME, reverseNested.getName());
                 assertEquals(expectedParentDocs, reverseNested.getDocCount());
 
-                InternalMax max = (InternalMax)
-                        ((InternalAggregation)reverseNested).getProperty(MAX_AGG_NAME);
+                Max max = (Max) ((InternalAggregation) reverseNested).getProperty(MAX_AGG_NAME);
                 assertEquals(MAX_AGG_NAME, max.getName());
-                assertEquals(expectedMaxValue, max.getValue(), Double.MIN_VALUE);
+                assertEquals(expectedMaxValue, max.value(), Double.MIN_VALUE);
             }
         }
     }
@@ -162,7 +148,7 @@ public class ReverseNestedAggregatorTests extends AggregatorTestCase {
         try (Directory directory = newDirectory()) {
             try (RandomIndexWriter iw = new RandomIndexWriter(random(), directory)) {
                 for (int i = 0; i < numParentDocs; i++) {
-                    List<Document> documents = new ArrayList<>();
+                    List<Iterable<IndexableField>> documents = new ArrayList<>();
                     int numNestedDocs = randomIntBetween(0, 20);
                     if (numNestedDocs > 0) {
                         expectedParentDocs++;
@@ -170,40 +156,36 @@ public class ReverseNestedAggregatorTests extends AggregatorTestCase {
 
                     for (int nested = 0; nested < numNestedDocs; nested++) {
                         Document document = new Document();
-                        document.add(new Field(IdFieldMapper.NAME, Uid.encodeId(Integer.toString(i)),
-                                IdFieldMapper.Defaults.NESTED_FIELD_TYPE));
-                        document.add(new Field(NestedPathFieldMapper.NAME, NESTED_OBJECT,
-                            NestedPathFieldMapper.Defaults.FIELD_TYPE));
+                        document.add(new StringField(IdFieldMapper.NAME, Uid.encodeId(Integer.toString(i)), Field.Store.NO));
+                        document.add(new StringField(NestedPathFieldMapper.NAME, NESTED_OBJECT, Field.Store.NO));
                         documents.add(document);
                     }
-                    Document document = new Document();
-                    document.add(new Field(IdFieldMapper.NAME, Uid.encodeId(Integer.toString(i)),
-                            IdFieldMapper.Defaults.FIELD_TYPE));
-                    document.add(new Field(NestedPathFieldMapper.NAME, "test",
-                        NestedPathFieldMapper.Defaults.FIELD_TYPE));
+                    LuceneDocument document = new LuceneDocument();
+                    document.add(new StringField(IdFieldMapper.NAME, Uid.encodeId(Integer.toString(i)), Field.Store.YES));
+                    document.add(new StringField(NestedPathFieldMapper.NAME, "test", Field.Store.NO));
 
                     long value = randomNonNegativeLong() % 10000;
                     document.add(new SortedNumericDocValuesField(VALUE_FIELD_NAME, value));
-                    document.add(SeqNoFieldMapper.SequenceIDFields.emptySeqID().primaryTerm);
+                    SeqNoFieldMapper.SequenceIDFields.emptySeqID().addFields(document);
                     documents.add(document);
                     iw.addDocuments(documents);
                 }
                 iw.commit();
             }
 
-            try (IndexReader indexReader = wrapInMockESDirectoryReader(DirectoryReader.open(directory))) {
+            try (DirectoryReader indexReader = wrapInMockESDirectoryReader(DirectoryReader.open(directory))) {
                 MaxAggregationBuilder maxAgg = max(MAX_AGG_NAME).field(VALUE_FIELD_NAME);
                 MaxAggregationBuilder aliasMaxAgg = max(MAX_AGG_NAME).field(VALUE_FIELD_NAME + "-alias");
 
                 NestedAggregationBuilder agg = nested(NESTED_AGG, NESTED_OBJECT).subAggregation(
-                    reverseNested(REVERSE_AGG_NAME).subAggregation(maxAgg));
+                    reverseNested(REVERSE_AGG_NAME).subAggregation(maxAgg)
+                );
                 NestedAggregationBuilder aliasAgg = nested(NESTED_AGG, NESTED_OBJECT).subAggregation(
-                    reverseNested(REVERSE_AGG_NAME).subAggregation(aliasMaxAgg));
+                    reverseNested(REVERSE_AGG_NAME).subAggregation(aliasMaxAgg)
+                );
 
-                Nested nested = searchAndReduce(newSearcher(indexReader, false, true),
-                        new MatchAllDocsQuery(), agg, fieldType);
-                Nested aliasNested = searchAndReduce(newSearcher(indexReader, false, true),
-                    new MatchAllDocsQuery(), aliasAgg, fieldType);
+                Nested nested = searchAndReduce(indexReader, new AggTestConfig(agg, fieldType));
+                Nested aliasNested = searchAndReduce(indexReader, new AggTestConfig(aliasAgg, fieldType));
 
                 ReverseNested reverseNested = nested.getAggregations().get(REVERSE_AGG_NAME);
                 ReverseNested aliasReverseNested = aliasNested.getAggregations().get(REVERSE_AGG_NAME);
@@ -218,26 +200,35 @@ public class ReverseNestedAggregatorTests extends AggregatorTestCase {
         int numProducts = scaledRandomIntBetween(1, 100);
         int numResellers = scaledRandomIntBetween(1, 100);
 
-        AggregationBuilder b = new NestedAggregationBuilder("nested", "nested_reseller")
-            .subAggregation(new TermsAggregationBuilder("resellers").field("reseller_id").size(numResellers)
-                .subAggregation(new ReverseNestedAggregationBuilder("reverse_nested")
-                    .subAggregation(new TermsAggregationBuilder("products").field("product_id").size(numProducts))));
-        testCase(b, new MatchAllDocsQuery(), NestedAggregatorTests.buildResellerData(numProducts, numResellers), result -> {
+        AggregationBuilder b = new NestedAggregationBuilder("nested", "nested_reseller").subAggregation(
+            new TermsAggregationBuilder("resellers").field("reseller_id")
+                .size(numResellers)
+                .subAggregation(
+                    new ReverseNestedAggregationBuilder("reverse_nested").subAggregation(
+                        new TermsAggregationBuilder("products").field("product_id").size(numProducts)
+                    )
+                )
+        );
+        testCase(NestedAggregatorTests.buildResellerData(numProducts, numResellers), result -> {
             InternalNested nested = (InternalNested) result;
             assertThat(nested.getDocCount(), equalTo((long) numProducts * numResellers));
             LongTerms resellers = nested.getAggregations().get("resellers");
-            assertThat(resellers.getBuckets().stream().map(LongTerms.Bucket::getKeyAsNumber).collect(toList()),
-                equalTo(LongStream.range(0, numResellers).mapToObj(Long::valueOf).collect(toList())));
+            assertThat(
+                resellers.getBuckets().stream().map(LongTerms.Bucket::getKeyAsNumber).collect(toList()),
+                equalTo(LongStream.range(0, numResellers).mapToObj(Long::valueOf).collect(toList()))
+            );
             for (int r = 0; r < numResellers; r++) {
                 LongTerms.Bucket bucket = resellers.getBucketByKey(Integer.toString(r));
                 assertThat(bucket.getDocCount(), equalTo((long) numProducts));
                 InternalReverseNested reverseNested = bucket.getAggregations().get("reverse_nested");
                 assertThat(reverseNested.getDocCount(), equalTo((long) numProducts));
                 LongTerms products = reverseNested.getAggregations().get("products");
-                assertThat(products.getBuckets().stream().map(LongTerms.Bucket::getKeyAsNumber).collect(toList()),
-                    equalTo(LongStream.range(0, numProducts).mapToObj(Long::valueOf).collect(toList())));
+                assertThat(
+                    products.getBuckets().stream().map(LongTerms.Bucket::getKeyAsNumber).collect(toList()),
+                    equalTo(LongStream.range(0, numProducts).mapToObj(Long::valueOf).collect(toList()))
+                );
             }
-        }, NestedAggregatorTests.resellersMappedFields());
+        }, new AggTestConfig(b, NestedAggregatorTests.resellersMappedFields()));
     }
 
     @Override

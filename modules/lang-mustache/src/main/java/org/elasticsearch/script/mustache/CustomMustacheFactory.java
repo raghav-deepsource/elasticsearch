@@ -8,7 +8,6 @@
 
 package org.elasticsearch.script.mustache;
 
-import com.fasterxml.jackson.core.io.JsonStringEncoder;
 import com.github.mustachejava.Code;
 import com.github.mustachejava.DefaultMustacheFactory;
 import com.github.mustachejava.DefaultMustacheVisitor;
@@ -19,9 +18,11 @@ import com.github.mustachejava.TemplateContext;
 import com.github.mustachejava.codes.DefaultMustache;
 import com.github.mustachejava.codes.IterableCode;
 import com.github.mustachejava.codes.WriteCode;
+
 import org.elasticsearch.common.Strings;
-import org.elasticsearch.common.xcontent.XContentBuilder;
-import org.elasticsearch.common.xcontent.XContentType;
+import org.elasticsearch.xcontent.XContentBuilder;
+import org.elasticsearch.xcontent.XContentType;
+import org.elasticsearch.xcontent.json.JsonStringEncoder;
 
 import java.io.IOException;
 import java.io.StringWriter;
@@ -48,11 +49,17 @@ public class CustomMustacheFactory extends DefaultMustacheFactory {
     private static final String DEFAULT_MEDIA_TYPE = JSON_MEDIA_TYPE;
 
     private static final Map<String, Supplier<Encoder>> ENCODERS = Map.of(
-        V7_JSON_MEDIA_TYPE_WITH_CHARSET, JsonEscapeEncoder::new,
-        JSON_MEDIA_TYPE_WITH_CHARSET, JsonEscapeEncoder::new,
-        JSON_MEDIA_TYPE, JsonEscapeEncoder::new,
-        PLAIN_TEXT_MEDIA_TYPE, DefaultEncoder::new,
-        X_WWW_FORM_URLENCODED_MEDIA_TYPE, UrlEncoder::new);
+        V7_JSON_MEDIA_TYPE_WITH_CHARSET,
+        JsonEscapeEncoder::new,
+        JSON_MEDIA_TYPE_WITH_CHARSET,
+        JsonEscapeEncoder::new,
+        JSON_MEDIA_TYPE,
+        JsonEscapeEncoder::new,
+        PLAIN_TEXT_MEDIA_TYPE,
+        DefaultEncoder::new,
+        X_WWW_FORM_URLENCODED_MEDIA_TYPE,
+        UrlEncoder::new
+    );
 
     private final Encoder encoder;
 
@@ -253,7 +260,7 @@ public class CustomMustacheFactory extends DefaultMustacheFactory {
 
     static class CustomJoinerCode extends JoinerCode {
 
-        private static final Pattern PATTERN = Pattern.compile("^(?:" + CODE + " delimiter='(.*)')$");
+        private static final Pattern PATTERN = Pattern.compile("^" + CODE + " delimiter='(.*)'$");
 
         CustomJoinerCode(TemplateContext tc, DefaultMustacheFactory df, Mustache mustache, String variable) {
             super(tc, df, mustache, extractDelimiter(variable));
@@ -350,7 +357,7 @@ public class CustomMustacheFactory extends DefaultMustacheFactory {
 
         @Override
         public void encode(String s, Writer writer) throws IOException {
-            writer.write(URLEncoder.encode(s, StandardCharsets.UTF_8.name()));
+            writer.write(URLEncoder.encode(s, StandardCharsets.UTF_8));
         }
     }
 }

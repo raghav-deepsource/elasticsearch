@@ -6,7 +6,7 @@
  */
 package org.elasticsearch.xpack.ml.integration;
 
-import org.elasticsearch.client.OriginSettingClient;
+import org.elasticsearch.client.internal.OriginSettingClient;
 import org.elasticsearch.cluster.routing.OperationRouting;
 import org.elasticsearch.cluster.service.ClusterApplierService;
 import org.elasticsearch.cluster.service.ClusterService;
@@ -24,7 +24,6 @@ import org.elasticsearch.xpack.core.ml.job.results.Bucket;
 import org.elasticsearch.xpack.ml.inference.ingest.InferenceProcessor;
 import org.elasticsearch.xpack.ml.job.persistence.JobResultsPersister;
 import org.elasticsearch.xpack.ml.job.persistence.JobResultsProvider;
-import org.elasticsearch.xpack.ml.notifications.AnomalyDetectionAuditor;
 import org.elasticsearch.xpack.ml.support.BaseMlIntegTestCase;
 import org.elasticsearch.xpack.ml.utils.persistence.ResultsPersisterService;
 import org.junit.Before;
@@ -39,29 +38,34 @@ import static org.hamcrest.CoreMatchers.equalTo;
 
 public class EstablishedMemUsageIT extends BaseMlIntegTestCase {
 
-    private long bucketSpan = AnalysisConfig.Builder.DEFAULT_BUCKET_SPAN.getMillis();
+    private final long bucketSpan = AnalysisConfig.Builder.DEFAULT_BUCKET_SPAN.getMillis();
 
     private JobResultsProvider jobResultsProvider;
     private JobResultsPersister jobResultsPersister;
 
     @Before
     public void createComponents() {
-        Settings settings = nodeSettings(0);
+        Settings settings = nodeSettings(0, Settings.EMPTY);
         ThreadPool tp = mockThreadPool();
-        ClusterSettings clusterSettings = new ClusterSettings(settings,
-            new HashSet<>(Arrays.asList(InferenceProcessor.MAX_INFERENCE_PROCESSORS,
-                MasterService.MASTER_SERVICE_SLOW_TASK_LOGGING_THRESHOLD_SETTING,
-                ResultsPersisterService.PERSIST_RESULTS_MAX_RETRIES,
-                OperationRouting.USE_ADAPTIVE_REPLICA_SELECTION_SETTING,
-                ClusterService.USER_DEFINED_METADATA,
-                ClusterApplierService.CLUSTER_SERVICE_SLOW_TASK_LOGGING_THRESHOLD_SETTING)));
-        ClusterService clusterService = new ClusterService(settings, clusterSettings, tp);
+        ClusterSettings clusterSettings = new ClusterSettings(
+            settings,
+            new HashSet<>(
+                Arrays.asList(
+                    InferenceProcessor.MAX_INFERENCE_PROCESSORS,
+                    MasterService.MASTER_SERVICE_SLOW_TASK_LOGGING_THRESHOLD_SETTING,
+                    ResultsPersisterService.PERSIST_RESULTS_MAX_RETRIES,
+                    OperationRouting.USE_ADAPTIVE_REPLICA_SELECTION_SETTING,
+                    ClusterService.USER_DEFINED_METADATA,
+                    ClusterApplierService.CLUSTER_SERVICE_SLOW_TASK_LOGGING_THRESHOLD_SETTING
+                )
+            )
+        );
+        ClusterService clusterService = new ClusterService(settings, clusterSettings, tp, null);
 
         OriginSettingClient originSettingClient = new OriginSettingClient(client(), ClientHelper.ML_ORIGIN);
         ResultsPersisterService resultsPersisterService = new ResultsPersisterService(tp, originSettingClient, clusterService, settings);
         jobResultsProvider = new JobResultsProvider(client(), settings, TestIndexNameExpressionResolver.newInstance());
-        jobResultsPersister = new JobResultsPersister(
-            originSettingClient, resultsPersisterService, new AnomalyDetectionAuditor(client(), clusterService));
+        jobResultsPersister = new JobResultsPersister(originSettingClient, resultsPersisterService);
     }
 
     public void testEstablishedMem_givenNoResults() throws Exception {
@@ -78,7 +82,7 @@ public class EstablishedMemUsageIT extends BaseMlIntegTestCase {
         initClusterAndJob(jobId);
 
         createBuckets(jobId, 25);
-        jobResultsPersister.commitResultWrites(jobId);
+        jobResultsPersister.commitWrites(jobId, JobResultsPersister.CommitType.RESULTS);
 
         assertThat(queryEstablishedMemoryUsage(jobId), equalTo(0L));
     }
@@ -89,7 +93,7 @@ public class EstablishedMemUsageIT extends BaseMlIntegTestCase {
         initClusterAndJob(jobId);
 
         createBuckets(jobId, 5);
-        jobResultsPersister.commitResultWrites(jobId);
+        jobResultsPersister.commitWrites(jobId, JobResultsPersister.CommitType.RESULTS);
 
         assertThat(queryEstablishedMemoryUsage(jobId), equalTo(0L));
     }
@@ -102,7 +106,7 @@ public class EstablishedMemUsageIT extends BaseMlIntegTestCase {
         createBuckets(jobId, 19);
         createModelSizeStats(jobId, 1, 19000L);
         ModelSizeStats latestModelSizeStats = createModelSizeStats(jobId, 10, 20000L);
-        jobResultsPersister.commitResultWrites(jobId);
+        jobResultsPersister.commitWrites(jobId, JobResultsPersister.CommitType.RESULTS);
 
         assertThat(queryEstablishedMemoryUsage(jobId), equalTo(0L));
         assertThat(queryEstablishedMemoryUsage(jobId, 19, latestModelSizeStats), equalTo(0L));
@@ -116,7 +120,7 @@ public class EstablishedMemUsageIT extends BaseMlIntegTestCase {
         createBuckets(jobId, 20);
         createModelSizeStats(jobId, 1, 19000L);
         ModelSizeStats latestModelSizeStats = createModelSizeStats(jobId, 10, 20000L);
-        jobResultsPersister.commitResultWrites(jobId);
+        jobResultsPersister.commitWrites(jobId, JobResultsPersister.CommitType.RESULTS);
 
         assertThat(queryEstablishedMemoryUsage(jobId), equalTo(20000L));
         assertThat(queryEstablishedMemoryUsage(jobId, 20, latestModelSizeStats), equalTo(20000L));
@@ -130,7 +134,7 @@ public class EstablishedMemUsageIT extends BaseMlIntegTestCase {
         createBuckets(jobId, 20);
         createModelSizeStats(jobId, 1, 0L);
         ModelSizeStats latestModelSizeStats = createModelSizeStats(jobId, 10, 0L);
-        jobResultsPersister.commitResultWrites(jobId);
+        jobResultsPersister.commitWrites(jobId, JobResultsPersister.CommitType.RESULTS);
 
         assertThat(queryEstablishedMemoryUsage(jobId), equalTo(0L));
         assertThat(queryEstablishedMemoryUsage(jobId, 20, latestModelSizeStats), equalTo(0L));
@@ -144,7 +148,7 @@ public class EstablishedMemUsageIT extends BaseMlIntegTestCase {
         createBuckets(jobId, 20);
         createModelSizeStats(jobId, 1, 1000L);
         ModelSizeStats latestModelSizeStats = createModelSizeStats(jobId, 10, 20000L);
-        jobResultsPersister.commitResultWrites(jobId);
+        jobResultsPersister.commitWrites(jobId, JobResultsPersister.CommitType.RESULTS);
 
         assertThat(queryEstablishedMemoryUsage(jobId), equalTo(0L));
         assertThat(queryEstablishedMemoryUsage(jobId, 20, latestModelSizeStats), equalTo(0L));
@@ -158,7 +162,7 @@ public class EstablishedMemUsageIT extends BaseMlIntegTestCase {
         createBuckets(jobId, 25);
         createModelSizeStats(jobId, 1, 10000L);
         ModelSizeStats latestModelSizeStats = createModelSizeStats(jobId, 2, 20000L);
-        jobResultsPersister.commitResultWrites(jobId);
+        jobResultsPersister.commitWrites(jobId, JobResultsPersister.CommitType.RESULTS);
 
         assertThat(queryEstablishedMemoryUsage(jobId), equalTo(20000L));
         assertThat(queryEstablishedMemoryUsage(jobId, 25, latestModelSizeStats), equalTo(20000L));
@@ -172,7 +176,7 @@ public class EstablishedMemUsageIT extends BaseMlIntegTestCase {
         createBuckets(jobId, 25);
         createModelSizeStats(jobId, 1, 10000L);
         ModelSizeStats latestModelSizeStats = createModelSizeStats(jobId, 10, 20000L);
-        jobResultsPersister.commitResultWrites(jobId);
+        jobResultsPersister.commitWrites(jobId, JobResultsPersister.CommitType.RESULTS);
 
         assertThat(queryEstablishedMemoryUsage(jobId), equalTo(20000L));
         assertThat(queryEstablishedMemoryUsage(jobId, 25, latestModelSizeStats), equalTo(20000L));
@@ -185,7 +189,7 @@ public class EstablishedMemUsageIT extends BaseMlIntegTestCase {
 
         createBuckets(jobId, 25);
         ModelSizeStats latestModelSizeStats = createModelSizeStats(jobId, 10, 0L);
-        jobResultsPersister.commitResultWrites(jobId);
+        jobResultsPersister.commitWrites(jobId, JobResultsPersister.CommitType.RESULTS);
 
         assertThat(queryEstablishedMemoryUsage(jobId), equalTo(0L));
         assertThat(queryEstablishedMemoryUsage(jobId, 25, latestModelSizeStats), equalTo(0L));
@@ -198,7 +202,7 @@ public class EstablishedMemUsageIT extends BaseMlIntegTestCase {
 
         createBuckets(jobId, 25);
         ModelSizeStats latestModelSizeStats = createModelSizeStats(jobId, 10, 20000L);
-        jobResultsPersister.commitResultWrites(jobId);
+        jobResultsPersister.commitWrites(jobId, JobResultsPersister.CommitType.RESULTS);
 
         assertThat(queryEstablishedMemoryUsage(jobId), equalTo(20000L));
         assertThat(queryEstablishedMemoryUsage(jobId, 25, latestModelSizeStats), equalTo(20000L));
@@ -216,7 +220,7 @@ public class EstablishedMemUsageIT extends BaseMlIntegTestCase {
         createModelSizeStats(jobId, 19, 9000L);
         createModelSizeStats(jobId, 30, 19000L);
         ModelSizeStats latestModelSizeStats = createModelSizeStats(jobId, 35, 20000L);
-        jobResultsPersister.commitResultWrites(jobId);
+        jobResultsPersister.commitWrites(jobId, JobResultsPersister.CommitType.RESULTS);
 
         assertThat(queryEstablishedMemoryUsage(jobId), equalTo(20000L));
         assertThat(queryEstablishedMemoryUsage(jobId, 40, latestModelSizeStats), equalTo(20000L));
@@ -234,7 +238,7 @@ public class EstablishedMemUsageIT extends BaseMlIntegTestCase {
         createModelSizeStats(jobId, 27, 39000L);
         createModelSizeStats(jobId, 30, 67000L);
         ModelSizeStats latestModelSizeStats = createModelSizeStats(jobId, 35, 95000L);
-        jobResultsPersister.commitResultWrites(jobId);
+        jobResultsPersister.commitWrites(jobId, JobResultsPersister.CommitType.RESULTS);
 
         assertThat(queryEstablishedMemoryUsage(jobId), equalTo(0L));
         assertThat(queryEstablishedMemoryUsage(jobId, 40, latestModelSizeStats), equalTo(0L));
@@ -259,10 +263,10 @@ public class EstablishedMemUsageIT extends BaseMlIntegTestCase {
     }
 
     private ModelSizeStats createModelSizeStats(String jobId, int bucketNum, long modelBytes) {
-        ModelSizeStats modelSizeStats = new ModelSizeStats.Builder(jobId)
-                .setTimestamp(new Date(bucketSpan * bucketNum))
-                .setLogTime(new Date(bucketSpan * bucketNum + randomIntBetween(1, 1000)))
-                .setModelBytes(modelBytes).build();
+        ModelSizeStats modelSizeStats = new ModelSizeStats.Builder(jobId).setTimestamp(new Date(bucketSpan * bucketNum))
+            .setLogTime(new Date(bucketSpan * bucketNum + randomIntBetween(1, 1000)))
+            .setModelBytes(modelBytes)
+            .build();
         jobResultsPersister.persistModelSizeStats(modelSizeStats, () -> true);
         return modelSizeStats;
     }
@@ -271,8 +275,7 @@ public class EstablishedMemUsageIT extends BaseMlIntegTestCase {
         return queryEstablishedMemoryUsage(jobId, null, null);
     }
 
-    private Long queryEstablishedMemoryUsage(String jobId, Integer bucketNum, ModelSizeStats latestModelSizeStats)
-            throws Exception {
+    private Long queryEstablishedMemoryUsage(String jobId, Integer bucketNum, ModelSizeStats latestModelSizeStats) throws Exception {
         AtomicReference<Long> establishedModelMemoryUsage = new AtomicReference<>();
         AtomicReference<Exception> exception = new AtomicReference<>();
 
@@ -280,12 +283,12 @@ public class EstablishedMemUsageIT extends BaseMlIntegTestCase {
 
         Date latestBucketTimestamp = (bucketNum != null) ? new Date(bucketSpan * bucketNum) : null;
         jobResultsProvider.getEstablishedMemoryUsage(jobId, latestBucketTimestamp, latestModelSizeStats, memUse -> {
-                    establishedModelMemoryUsage.set(memUse);
-                    latch.countDown();
-                }, e -> {
-                    exception.set(e);
-                    latch.countDown();
-                });
+            establishedModelMemoryUsage.set(memUse);
+            latch.countDown();
+        }, e -> {
+            exception.set(e);
+            latch.countDown();
+        });
 
         latch.await();
 

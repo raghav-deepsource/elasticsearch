@@ -17,7 +17,7 @@ import org.elasticsearch.action.delete.DeleteResponse;
 import org.elasticsearch.action.index.IndexResponse;
 import org.elasticsearch.action.support.WriteRequest.RefreshPolicy;
 import org.elasticsearch.action.update.UpdateResponse;
-import org.elasticsearch.client.Requests;
+import org.elasticsearch.client.internal.Requests;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.plugins.Plugin;
 import org.elasticsearch.rest.RestStatus;
@@ -35,7 +35,6 @@ import java.util.function.Function;
 
 import static java.util.Collections.emptyMap;
 import static java.util.Collections.singleton;
-import static java.util.Collections.singletonMap;
 import static org.elasticsearch.index.query.QueryBuilders.matchQuery;
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertNoFailures;
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertNoSearchHits;
@@ -58,8 +57,11 @@ public class WaitUntilRefreshIT extends ESIntegTestCase {
     }
 
     public void testIndex() {
-        IndexResponse index = client().prepareIndex("test").setId("1").setSource("foo", "bar").setRefreshPolicy(RefreshPolicy.WAIT_UNTIL)
-                .get();
+        IndexResponse index = client().prepareIndex("test")
+            .setId("1")
+            .setSource("foo", "bar")
+            .setRefreshPolicy(RefreshPolicy.WAIT_UNTIL)
+            .get();
         assertEquals(RestStatus.CREATED, index.status());
         assertFalse("request shouldn't have forced a refresh", index.forcedRefresh());
         assertSearchHits(client().prepareSearch("test").setQuery(matchQuery("foo", "bar")).get(), "1");
@@ -84,23 +86,28 @@ public class WaitUntilRefreshIT extends ESIntegTestCase {
 
         // Update with RefreshPolicy.WAIT_UNTIL
         UpdateResponse update = client().prepareUpdate("test", "1")
-            .setDoc(Requests.INDEX_CONTENT_TYPE, "foo", "baz").setRefreshPolicy(RefreshPolicy.WAIT_UNTIL)
-                .get();
+            .setDoc(Requests.INDEX_CONTENT_TYPE, "foo", "baz")
+            .setRefreshPolicy(RefreshPolicy.WAIT_UNTIL)
+            .get();
         assertEquals(2, update.getVersion());
         assertFalse("request shouldn't have forced a refresh", update.forcedRefresh());
         assertSearchHits(client().prepareSearch("test").setQuery(matchQuery("foo", "baz")).get(), "1");
 
         // Upsert with RefreshPolicy.WAIT_UNTIL
-        update = client().prepareUpdate("test", "2").setDocAsUpsert(true).setDoc(Requests.INDEX_CONTENT_TYPE, "foo", "cat")
-                .setRefreshPolicy(RefreshPolicy.WAIT_UNTIL).get();
+        update = client().prepareUpdate("test", "2")
+            .setDocAsUpsert(true)
+            .setDoc(Requests.INDEX_CONTENT_TYPE, "foo", "cat")
+            .setRefreshPolicy(RefreshPolicy.WAIT_UNTIL)
+            .get();
         assertEquals(1, update.getVersion());
         assertFalse("request shouldn't have forced a refresh", update.forcedRefresh());
         assertSearchHits(client().prepareSearch("test").setQuery(matchQuery("foo", "cat")).get(), "2");
 
         // Update-becomes-delete with RefreshPolicy.WAIT_UNTIL
-        update = client().prepareUpdate("test", "2").setScript(
-            new Script(ScriptType.INLINE, "mockscript", "delete_plz", emptyMap()))
-                .setRefreshPolicy(RefreshPolicy.WAIT_UNTIL).get();
+        update = client().prepareUpdate("test", "2")
+            .setScript(new Script(ScriptType.INLINE, "mockscript", "delete_plz", emptyMap()))
+            .setRefreshPolicy(RefreshPolicy.WAIT_UNTIL)
+            .get();
         assertEquals(2, update.getVersion());
         assertFalse("request shouldn't have forced a refresh", update.forcedRefresh());
         assertNoSearchHits(client().prepareSearch("test").setQuery(matchQuery("foo", "cat")).get());
@@ -136,11 +143,14 @@ public class WaitUntilRefreshIT extends ESIntegTestCase {
      * explicit refresh if the interval is -1 because we don't have that kind of control over refresh. It can happen all on its own.
      */
     public void testNoRefreshInterval() throws InterruptedException, ExecutionException {
-        client().admin().indices().prepareUpdateSettings("test").setSettings(singletonMap("index.refresh_interval", -1)).get();
-        ActionFuture<IndexResponse> index = client().prepareIndex("test").setId("1").setSource("foo", "bar")
-                .setRefreshPolicy(RefreshPolicy.WAIT_UNTIL).execute();
+        updateIndexSettings(Settings.builder().put("index.refresh_interval", -1), "test");
+        ActionFuture<IndexResponse> index = client().prepareIndex("test")
+            .setId("1")
+            .setSource("foo", "bar")
+            .setRefreshPolicy(RefreshPolicy.WAIT_UNTIL)
+            .execute();
         while (false == index.isDone()) {
-            client().admin().indices().prepareRefresh("test").get();
+            indicesAdmin().prepareRefresh("test").get();
         }
         assertEquals(RestStatus.CREATED, index.get().status());
         assertFalse("request shouldn't have forced a refresh", index.get().forcedRefresh());

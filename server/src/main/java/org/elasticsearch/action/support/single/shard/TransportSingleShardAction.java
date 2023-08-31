@@ -8,8 +8,8 @@
 
 package org.elasticsearch.action.support.single.shard;
 
-import org.apache.logging.log4j.message.ParameterizedMessage;
 import org.elasticsearch.action.ActionListener;
+import org.elasticsearch.action.ActionListenerResponseHandler;
 import org.elasticsearch.action.ActionResponse;
 import org.elasticsearch.action.ActionRunnable;
 import org.elasticsearch.action.NoShardAvailableActionException;
@@ -26,10 +26,9 @@ import org.elasticsearch.cluster.node.DiscoveryNodes;
 import org.elasticsearch.cluster.routing.ShardRouting;
 import org.elasticsearch.cluster.routing.ShardsIterator;
 import org.elasticsearch.cluster.service.ClusterService;
-import org.elasticsearch.common.Nullable;
-import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.Writeable;
 import org.elasticsearch.common.logging.LoggerMessageFormat;
+import org.elasticsearch.core.Nullable;
 import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.tasks.Task;
 import org.elasticsearch.threadpool.ThreadPool;
@@ -42,14 +41,15 @@ import org.elasticsearch.transport.TransportService;
 import java.io.IOException;
 
 import static org.elasticsearch.action.support.TransportActions.isShardNotAvailableException;
+import static org.elasticsearch.core.Strings.format;
 
 /**
  * A base class for operations that need to perform a read operation on a single shard copy. If the operation fails,
  * the read operation can be performed on other shard copies. Concrete implementations can provide their own list
  * of candidate shards to try the read operation on.
  */
-public abstract class TransportSingleShardAction<Request extends SingleShardRequest<Request>, Response extends ActionResponse>
-        extends TransportAction<Request, Response> {
+public abstract class TransportSingleShardAction<Request extends SingleShardRequest<Request>, Response extends ActionResponse> extends
+    TransportAction<Request, Response> {
 
     protected final ThreadPool threadPool;
     protected final ClusterService clusterService;
@@ -59,10 +59,16 @@ public abstract class TransportSingleShardAction<Request extends SingleShardRequ
     private final String transportShardAction;
     private final String executor;
 
-    protected TransportSingleShardAction(String actionName, ThreadPool threadPool, ClusterService clusterService,
-                                         TransportService transportService, ActionFilters actionFilters,
-                                         IndexNameExpressionResolver indexNameExpressionResolver, Writeable.Reader<Request> request,
-                                         String executor) {
+    protected TransportSingleShardAction(
+        String actionName,
+        ThreadPool threadPool,
+        ClusterService clusterService,
+        TransportService transportService,
+        ActionFilters actionFilters,
+        IndexNameExpressionResolver indexNameExpressionResolver,
+        Writeable.Reader<Request> request,
+        String executor
+    ) {
         super(actionName, actionFilters, transportService.getTaskManager());
         this.threadPool = threadPool;
         this.clusterService = clusterService;
@@ -95,15 +101,14 @@ public abstract class TransportSingleShardAction<Request extends SingleShardRequ
     protected abstract Response shardOperation(Request request, ShardId shardId) throws IOException;
 
     protected void asyncShardOperation(Request request, ShardId shardId, ActionListener<Response> listener) throws IOException {
-        threadPool.executor(getExecutor(request, shardId))
-            .execute(ActionRunnable.supply(listener, () -> shardOperation(request, shardId)));
+        threadPool.executor(getExecutor(request, shardId)).execute(ActionRunnable.supply(listener, () -> shardOperation(request, shardId)));
     }
 
     protected abstract Writeable.Reader<Response> getResponseReader();
 
     protected abstract boolean resolveIndex(Request request);
 
-    protected ClusterBlockException checkGlobalBlock(ClusterState state) {
+    protected static ClusterBlockException checkGlobalBlock(ClusterState state) {
         return state.blocks().globalBlockedException(ClusterBlockLevel.READ);
     }
 
@@ -164,23 +169,12 @@ public abstract class TransportSingleShardAction<Request extends SingleShardRequ
             if (shardIt == null) {
                 // just execute it on the local node
                 final Writeable.Reader<Response> reader = getResponseReader();
-                transportService.sendRequest(clusterService.localNode(), transportShardAction, internalRequest.request(),
-                    new TransportResponseHandler<Response>() {
-                    @Override
-                    public Response read(StreamInput in) throws IOException {
-                        return reader.read(in);
-                    }
-
-                    @Override
-                    public void handleResponse(final Response response) {
-                        listener.onResponse(response);
-                    }
-
-                    @Override
-                    public void handleException(TransportException exp) {
-                        listener.onFailure(exp);
-                    }
-                });
+                transportService.sendRequest(
+                    clusterService.localNode(),
+                    transportShardAction,
+                    internalRequest.request(),
+                    new ActionListenerResponseHandler<>(listener, reader, TransportResponseHandler.TRANSPORT_WORKER)
+                );
             } else {
                 perform(null);
             }
@@ -188,8 +182,7 @@ public abstract class TransportSingleShardAction<Request extends SingleShardRequ
 
         private void onFailure(ShardRouting shardRouting, Exception e) {
             if (e != null) {
-                logger.trace(() -> new ParameterizedMessage("{}: failed to execute [{}]", shardRouting,
-                    internalRequest.request()), e);
+                logger.trace(() -> format("%s: failed to execute [%s]", shardRouting, internalRequest.request()), e);
             }
             perform(e);
         }
@@ -204,11 +197,13 @@ public abstract class TransportSingleShardAction<Request extends SingleShardRequ
             if (shardRouting == null) {
                 Exception failure = lastFailure;
                 if (failure == null || isShardNotAvailableException(failure)) {
-                    failure = new NoShardAvailableActionException(null,
-                        LoggerMessageFormat.format("No shard available for [{}]", internalRequest.request()), failure);
+                    failure = new NoShardAvailableActionException(
+                        null,
+                        LoggerMessageFormat.format("No shard available for [{}]", internalRequest.request()),
+                        failure
+                    );
                 } else {
-                    logger.debug(() -> new ParameterizedMessage("{}: failed to execute [{}]", null,
-                        internalRequest.request()), failure);
+                    logger.debug(() -> format("%s: failed to execute [%s]", null, internalRequest.request()), failure);
                 }
                 listener.onFailure(failure);
                 return;
@@ -220,31 +215,24 @@ public abstract class TransportSingleShardAction<Request extends SingleShardRequ
                 internalRequest.request().internalShardId = shardRouting.shardId();
                 if (logger.isTraceEnabled()) {
                     logger.trace(
-                            "sending request [{}] to shard [{}] on node [{}]",
-                            internalRequest.request(),
-                            internalRequest.request().internalShardId,
-                            node
+                        "sending request [{}] to shard [{}] on node [{}]",
+                        internalRequest.request(),
+                        internalRequest.request().internalShardId,
+                        node
                     );
                 }
                 final Writeable.Reader<Response> reader = getResponseReader();
-                transportService.sendRequest(node, transportShardAction, internalRequest.request(),
-                    new TransportResponseHandler<Response>() {
-
-                        @Override
-                        public Response read(StreamInput in) throws IOException {
-                            return reader.read(in);
-                        }
-
-                        @Override
-                        public void handleResponse(final Response response) {
-                            listener.onResponse(response);
-                        }
-
+                transportService.sendRequest(
+                    node,
+                    transportShardAction,
+                    internalRequest.request(),
+                    new ActionListenerResponseHandler<>(listener, reader, TransportResponseHandler.TRANSPORT_WORKER) {
                         @Override
                         public void handleException(TransportException exp) {
                             onFailure(shardRouting, exp);
                         }
-                });
+                    }
+                );
             }
         }
     }
@@ -254,7 +242,7 @@ public abstract class TransportSingleShardAction<Request extends SingleShardRequ
         @Override
         public void messageReceived(Request request, final TransportChannel channel, Task task) throws Exception {
             // if we have a local operation, execute it on a thread since we don't spawn
-            execute(task, request, new ChannelActionListener<>(channel, actionName, request));
+            execute(task, request, new ChannelActionListener<>(channel));
         }
     }
 
@@ -265,9 +253,10 @@ public abstract class TransportSingleShardAction<Request extends SingleShardRequ
             if (logger.isTraceEnabled()) {
                 logger.trace("executing [{}] on shard [{}]", request, request.internalShardId);
             }
-            asyncShardOperation(request, request.internalShardId, new ChannelActionListener<>(channel, transportShardAction, request));
+            asyncShardOperation(request, request.internalShardId, new ChannelActionListener<>(channel));
         }
     }
+
     /**
      * Internal request class that gets built on each node. Holds the original request plus additional info.
      */

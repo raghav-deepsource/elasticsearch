@@ -8,20 +8,14 @@
 
 package org.elasticsearch.index.rankeval;
 
-import org.elasticsearch.action.ActionType;
 import org.elasticsearch.action.ActionRequestBuilder;
-import org.elasticsearch.client.ElasticsearchClient;
+import org.elasticsearch.action.ActionType;
+import org.elasticsearch.client.internal.ElasticsearchClient;
 
 public class RankEvalRequestBuilder extends ActionRequestBuilder<RankEvalRequest, RankEvalResponse> {
 
-    public RankEvalRequestBuilder(ElasticsearchClient client, ActionType<RankEvalResponse> action,
-            RankEvalRequest request) {
+    public RankEvalRequestBuilder(ElasticsearchClient client, ActionType<RankEvalResponse> action, RankEvalRequest request) {
         super(client, action, request);
-    }
-
-    @Override
-    public RankEvalRequest request() {
-        return request;
     }
 
     public void setRankEvalSpec(RankEvalSpec spec) {

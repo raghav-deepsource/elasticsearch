@@ -8,7 +8,7 @@
 package org.elasticsearch.xpack.core.common.validation;
 
 import org.elasticsearch.Version;
-import org.elasticsearch.action.ActionListener;
+import org.elasticsearch.action.support.ActionTestUtils;
 import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.transport.NoSuchRemoteClusterException;
 import org.elasticsearch.xpack.core.common.validation.SourceDestValidator.Context;
@@ -57,9 +57,8 @@ public class RemoteClusterMinimumVersionValidationTests extends ESTestCase {
         SourceDestValidation validation = new RemoteClusterMinimumVersionValidation(MIN_EXPECTED_VERSION, REASON);
         validation.validate(
             context,
-            ActionListener.wrap(
-                ctx -> assertThat(ctx.getValidationException(), is(nullValue())),
-                e -> fail(e.getMessage())));
+            ActionTestUtils.assertNoFailureListener(ctx -> assertThat(ctx.getValidationException(), is(nullValue())))
+        );
     }
 
     public void testValidate_RemoteClustersVersionsOk() {
@@ -68,9 +67,8 @@ public class RemoteClusterMinimumVersionValidationTests extends ESTestCase {
         SourceDestValidation validation = new RemoteClusterMinimumVersionValidation(MIN_EXPECTED_VERSION, REASON);
         validation.validate(
             context,
-            ActionListener.wrap(
-                ctx -> assertThat(ctx.getValidationException(), is(nullValue())),
-                e -> fail(e.getMessage())));
+            ActionTestUtils.assertNoFailureListener(ctx -> assertThat(ctx.getValidationException(), is(nullValue())))
+        );
     }
 
     public void testValidate_OneRemoteClusterVersionTooLow() {
@@ -79,12 +77,16 @@ public class RemoteClusterMinimumVersionValidationTests extends ESTestCase {
         SourceDestValidation validation = new RemoteClusterMinimumVersionValidation(MIN_EXPECTED_VERSION, REASON);
         validation.validate(
             context,
-            ActionListener.wrap(
+            ActionTestUtils.assertNoFailureListener(
                 ctx -> assertThat(
                     ctx.getValidationException().validationErrors(),
-                    contains("remote clusters are expected to run at least version [7.11.0] (reason: [some reason]), "
-                        + "but the following clusters were too old: [cluster-A (7.10.2)]")),
-                e -> fail(e.getMessage())));
+                    contains(
+                        "remote clusters are expected to run at least version [7.11.0] (reason: [some reason]), "
+                            + "but the following clusters were too old: [cluster-A (7.10.2)]"
+                    )
+                )
+            )
+        );
     }
 
     public void testValidate_TwoRemoteClusterVersionsTooLow() {
@@ -93,12 +95,16 @@ public class RemoteClusterMinimumVersionValidationTests extends ESTestCase {
         SourceDestValidation validation = new RemoteClusterMinimumVersionValidation(Version.V_7_11_2, REASON);
         validation.validate(
             context,
-            ActionListener.wrap(
+            ActionTestUtils.assertNoFailureListener(
                 ctx -> assertThat(
                     ctx.getValidationException().validationErrors(),
-                    contains("remote clusters are expected to run at least version [7.11.2] (reason: [some reason]), "
-                        + "but the following clusters were too old: [cluster-A (7.10.2), cluster-B (7.11.0)]")),
-                e -> fail(e.getMessage())));
+                    contains(
+                        "remote clusters are expected to run at least version [7.11.2] (reason: [some reason]), "
+                            + "but the following clusters were too old: [cluster-A (7.10.2), cluster-B (7.11.0)]"
+                    )
+                )
+            )
+        );
     }
 
     public void testValidate_NoSuchRemoteCluster() {
@@ -108,9 +114,10 @@ public class RemoteClusterMinimumVersionValidationTests extends ESTestCase {
         SourceDestValidation validation = new RemoteClusterMinimumVersionValidation(MIN_EXPECTED_VERSION, REASON);
         validation.validate(
             context,
-            ActionListener.wrap(
-                ctx -> assertThat(ctx.getValidationException().validationErrors(), contains("no such remote cluster: [cluster-D]")),
-                e -> fail(e.getMessage())));
+            ActionTestUtils.assertNoFailureListener(
+                ctx -> assertThat(ctx.getValidationException().validationErrors(), contains("no such remote cluster: [cluster-D]"))
+            )
+        );
     }
 
     public void testValidate_OtherProblem() {
@@ -120,10 +127,12 @@ public class RemoteClusterMinimumVersionValidationTests extends ESTestCase {
         SourceDestValidation validation = new RemoteClusterMinimumVersionValidation(MIN_EXPECTED_VERSION, REASON);
         validation.validate(
             context,
-            ActionListener.wrap(
+            ActionTestUtils.assertNoFailureListener(
                 ctx -> assertThat(
                     ctx.getValidationException().validationErrors(),
-                    contains("Error resolving remote source: some-other-problem")),
-                e -> fail(e.getMessage())));
+                    contains("Error resolving remote source: some-other-problem")
+                )
+            )
+        );
     }
 }

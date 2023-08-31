@@ -8,10 +8,9 @@
 
 package org.elasticsearch.plugins;
 
-import java.util.Collections;
-import java.util.Map;
-
 import org.elasticsearch.ingest.Processor;
+
+import java.util.Map;
 
 /**
  * An extension point for {@link Plugin} implementations to add custom ingest processors
@@ -26,6 +25,6 @@ public interface IngestPlugin {
      * to create the processor from a given pipeline configuration.
      */
     default Map<String, Processor.Factory> getProcessors(Processor.Parameters parameters) {
-        return Collections.emptyMap();
+        return Map.of();
     }
 }

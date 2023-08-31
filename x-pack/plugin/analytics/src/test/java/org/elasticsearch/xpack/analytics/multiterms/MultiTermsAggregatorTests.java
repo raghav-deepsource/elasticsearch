@@ -7,22 +7,6 @@
 
 package org.elasticsearch.xpack.analytics.multiterms;
 
-import static org.elasticsearch.xpack.analytics.multiterms.MultiTermsAggregationBuilderTests.randomTermConfig;
-import static org.hamcrest.Matchers.closeTo;
-import static org.hamcrest.Matchers.contains;
-import static org.hamcrest.Matchers.equalTo;
-import static org.hamcrest.Matchers.hasSize;
-
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.function.Consumer;
-import java.util.function.Function;
-
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.FloatDocValuesField;
 import org.apache.lucene.document.LongPoint;
@@ -31,15 +15,15 @@ import org.apache.lucene.document.SortedNumericDocValuesField;
 import org.apache.lucene.document.SortedSetDocValuesField;
 import org.apache.lucene.document.StringField;
 import org.apache.lucene.index.IndexableField;
-import org.apache.lucene.index.RandomIndexWriter;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.search.MatchAllDocsQuery;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.TermQuery;
+import org.apache.lucene.tests.index.RandomIndexWriter;
 import org.apache.lucene.util.BytesRef;
-import org.elasticsearch.common.CheckedConsumer;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.time.DateFormatter;
+import org.elasticsearch.core.CheckedConsumer;
 import org.elasticsearch.index.fielddata.ScriptDocValues;
 import org.elasticsearch.index.mapper.DateFieldMapper;
 import org.elasticsearch.index.mapper.KeywordFieldMapper;
@@ -55,7 +39,7 @@ import org.elasticsearch.script.ScriptType;
 import org.elasticsearch.search.aggregations.AggregationBuilder;
 import org.elasticsearch.search.aggregations.AggregatorTestCase;
 import org.elasticsearch.search.aggregations.BucketOrder;
-import org.elasticsearch.search.aggregations.metrics.InternalMax;
+import org.elasticsearch.search.aggregations.metrics.Max;
 import org.elasticsearch.search.aggregations.metrics.MaxAggregationBuilder;
 import org.elasticsearch.search.aggregations.support.CoreValuesSourceType;
 import org.elasticsearch.search.aggregations.support.MultiValuesSourceFieldConfig;
@@ -63,6 +47,22 @@ import org.elasticsearch.search.aggregations.support.ValueType;
 import org.elasticsearch.search.aggregations.support.ValuesSourceType;
 import org.elasticsearch.search.lookup.LeafDocLookup;
 import org.elasticsearch.xpack.analytics.AnalyticsPlugin;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Consumer;
+import java.util.function.Function;
+
+import static org.elasticsearch.xpack.analytics.multiterms.MultiTermsAggregationBuilderTests.randomTermConfig;
+import static org.hamcrest.Matchers.closeTo;
+import static org.hamcrest.Matchers.contains;
+import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.hasSize;
 
 public class MultiTermsAggregatorTests extends AggregatorTestCase {
 
@@ -112,7 +112,7 @@ public class MultiTermsAggregatorTests extends AggregatorTestCase {
         MockScriptEngine scriptEngine = new MockScriptEngine(MockScriptEngine.NAME, scripts, Collections.emptyMap());
         Map<String, ScriptEngine> engines = Collections.singletonMap(scriptEngine.getType(), scriptEngine);
 
-        return new ScriptService(Settings.EMPTY, engines, ScriptModule.CORE_CONTEXTS);
+        return new ScriptService(Settings.EMPTY, engines, ScriptModule.CORE_CONTEXTS, () -> 1L);
     }
 
     public void testIntegersFloatsAndStrings() throws IOException {
@@ -458,19 +458,19 @@ public class MultiTermsAggregatorTests extends AggregatorTestCase {
 
             assertThat(h.getBuckets().get(0).getKey(), contains(equalTo(3L), equalTo("b")));
             assertThat(h.getBuckets().get(0).getDocCount(), equalTo(1L));
-            assertThat(((InternalMax) (h.getBuckets().get(0).getAggregations().get("max_float"))).value(), closeTo(2.0, 0.00001));
+            assertThat(((Max) (h.getBuckets().get(0).getAggregations().get("max_float"))).value(), closeTo(2.0, 0.00001));
 
             assertThat(h.getBuckets().get(1).getKey(), contains(equalTo(1L), equalTo("a")));
             assertThat(h.getBuckets().get(1).getDocCount(), equalTo(1L));
-            assertThat(((InternalMax) (h.getBuckets().get(1).getAggregations().get("max_float"))).value(), closeTo(3.0, 0.00001));
+            assertThat(((Max) (h.getBuckets().get(1).getAggregations().get("max_float"))).value(), closeTo(3.0, 0.00001));
 
             assertThat(h.getBuckets().get(2).getKey(), contains(equalTo(2L), equalTo("a")));
             assertThat(h.getBuckets().get(2).getDocCount(), equalTo(1L));
-            assertThat(((InternalMax) (h.getBuckets().get(2).getAggregations().get("max_float"))).value(), closeTo(4.0, 0.00001));
+            assertThat(((Max) (h.getBuckets().get(2).getAggregations().get("max_float"))).value(), closeTo(4.0, 0.00001));
 
             assertThat(h.getBuckets().get(3).getKey(), contains(equalTo(3L), equalTo("a")));
             assertThat(h.getBuckets().get(3).getDocCount(), equalTo(2L));
-            assertThat(((InternalMax) (h.getBuckets().get(3).getAggregations().get("max_float"))).value(), closeTo(5.0, 0.00001));
+            assertThat(((Max) (h.getBuckets().get(3).getAggregations().get("max_float"))).value(), closeTo(5.0, 0.00001));
         });
     }
 
@@ -572,13 +572,9 @@ public class MultiTermsAggregatorTests extends AggregatorTestCase {
 
             IllegalArgumentException ex = expectThrows(
                 IllegalArgumentException.class,
-                () -> testCase(
-                    new MatchAllDocsQuery(),
-                    terms,
-                    null,
-                    iw -> { iw.addDocument(docWithDate("2020-01-01", new NumericDocValuesField(INT_FIELD, 3))); },
-                    h -> fail("Should have thrown exception")
-                )
+                () -> testCase(new MatchAllDocsQuery(), terms, null, iw -> {
+                    iw.addDocument(docWithDate("2020-01-01", new NumericDocValuesField(INT_FIELD, 3)));
+                }, h -> fail("Should have thrown exception"))
             );
             if (terms == null) {
                 assertEquals("[terms] must not be null: [my_terms]", ex.getMessage());
@@ -591,6 +587,33 @@ public class MultiTermsAggregatorTests extends AggregatorTestCase {
             }
         }
 
+    }
+
+    public void testShardSize() throws IOException {
+        testCase(
+            new MatchAllDocsQuery(),
+            List.of(
+                new MultiValuesSourceFieldConfig.Builder().setFieldName(INT_FIELD).build(),
+                new MultiValuesSourceFieldConfig.Builder().setFieldName(DATE_FIELD).build()
+            ),
+            ab -> ab.size(1).shardSize(1),
+            iw -> {
+                for (int i = 0; i < 100; i++) {
+                    iw.addDocument(docWithDate("2020-01-01", new NumericDocValuesField(INT_FIELD, 1)));
+                    if (i < 80) {
+                        iw.addDocument(docWithDate("2020-01-01", new NumericDocValuesField(INT_FIELD, 2)));
+                    }
+                    if (i < 60) {
+                        iw.addDocument(docWithDate("2020-01-01", new NumericDocValuesField(INT_FIELD, 3)));
+                    }
+                }
+            },
+            h -> {
+                assertThat(h.getBuckets(), hasSize(1));
+                assertThat(h.getBuckets().get(0).getDocCount(), equalTo(100L));
+            },
+            false
+        );
     }
 
     private void testCase(
@@ -614,6 +637,17 @@ public class MultiTermsAggregatorTests extends AggregatorTestCase {
         CheckedConsumer<RandomIndexWriter, IOException> buildIndex,
         Consumer<InternalMultiTerms> verify
     ) throws IOException {
+        testCase(query, terms, builderSetup, buildIndex, verify, randomBoolean());
+    }
+
+    private void testCase(
+        Query query,
+        List<MultiValuesSourceFieldConfig> terms,
+        Consumer<MultiTermsAggregationBuilder> builderSetup,
+        CheckedConsumer<RandomIndexWriter, IOException> buildIndex,
+        Consumer<InternalMultiTerms> verify,
+        boolean withSplitLeavesIntoSeparateAggregators
+    ) throws IOException {
         MappedFieldType dateType = dateFieldType(DATE_FIELD);
         MappedFieldType intType = new NumberFieldMapper.NumberFieldType(INT_FIELD, NumberFieldMapper.NumberType.INTEGER);
         MappedFieldType floatType = new NumberFieldMapper.NumberFieldType(FLOAT_FIELD, NumberFieldMapper.NumberType.FLOAT);
@@ -634,7 +668,9 @@ public class MultiTermsAggregatorTests extends AggregatorTestCase {
                 builder.size(randomIntBetween(10, 200));
             }
         }
-        testCase(builder, query, buildIndex, verify, dateType, intType, floatType, keywordType);
+        AggTestConfig aggTestConfig = new AggTestConfig(builder, dateType, intType, floatType, keywordType).withQuery(query)
+            .withSplitLeavesIntoSeperateAggregators(withSplitLeavesIntoSeparateAggregators);
+        testCase(buildIndex, verify, aggTestConfig);
     }
 
     @Override
@@ -650,6 +686,7 @@ public class MultiTermsAggregatorTests extends AggregatorTestCase {
             true,
             DateFormatter.forPattern("strict_date"),
             DateFieldMapper.Resolution.MILLISECONDS,
+            null,
             null,
             Collections.emptyMap()
         );

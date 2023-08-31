@@ -25,16 +25,22 @@ import static org.elasticsearch.search.aggregations.metrics.WeightedAvgAggregati
 
 class WeightedAvgAggregatorFactory extends MultiValuesSourceAggregatorFactory {
 
-    WeightedAvgAggregatorFactory(String name, Map<String, ValuesSourceConfig> configs,
-                                 DocValueFormat format, AggregationContext context, AggregatorFactory parent,
-                                 AggregatorFactories.Builder subFactoriesBuilder,
-                                 Map<String, Object> metadata) throws IOException {
+    WeightedAvgAggregatorFactory(
+        String name,
+        Map<String, ValuesSourceConfig> configs,
+        DocValueFormat format,
+        AggregationContext context,
+        AggregatorFactory parent,
+        AggregatorFactories.Builder subFactoriesBuilder,
+        Map<String, Object> metadata
+    ) throws IOException {
         super(name, configs, format, context, parent, subFactoriesBuilder, metadata);
     }
 
     @Override
     protected Aggregator createUnmapped(Aggregator parent, Map<String, Object> metadata) throws IOException {
-        return new WeightedAvgAggregator(name, null, format, context, parent, metadata);
+        final InternalWeightedAvg empty = InternalWeightedAvg.empty(name, format, metadata);
+        return new NonCollectingSingleMetricAggregator(name, context, parent, empty, metadata);
     }
 
     @Override

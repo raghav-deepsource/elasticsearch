@@ -14,12 +14,19 @@ import org.elasticsearch.search.DocValueFormat;
 import java.io.IOException;
 import java.util.Iterator;
 import java.util.Map;
+import java.util.Objects;
 
 public class InternalHDRPercentileRanks extends AbstractInternalHDRPercentiles implements PercentileRanks {
     public static final String NAME = "hdr_percentile_ranks";
 
-    public InternalHDRPercentileRanks(String name, double[] cdfValues, DoubleHistogram state, boolean keyed, DocValueFormat formatter,
-                                      Map<String, Object> metadata) {
+    public InternalHDRPercentileRanks(
+        String name,
+        double[] cdfValues,
+        DoubleHistogram state,
+        boolean keyed,
+        DocValueFormat formatter,
+        Map<String, Object> metadata
+    ) {
         super(name, cdfValues, state, keyed, formatter, metadata);
     }
 
@@ -35,8 +42,21 @@ public class InternalHDRPercentileRanks extends AbstractInternalHDRPercentiles i
         return NAME;
     }
 
+    public static InternalHDRPercentileRanks empty(
+        String name,
+        double[] keys,
+        boolean keyed,
+        DocValueFormat format,
+        Map<String, Object> metadata
+    ) {
+        return new InternalHDRPercentileRanks(name, keys, null, keyed, format, metadata);
+    }
+
     @Override
     public Iterator<Percentile> iterator() {
+        if (state == null) {
+            return EMPTY_ITERATOR;
+        }
         return new Iter(keys, state);
     }
 
@@ -56,13 +76,18 @@ public class InternalHDRPercentileRanks extends AbstractInternalHDRPercentiles i
     }
 
     @Override
-    protected AbstractInternalHDRPercentiles createReduced(String name, double[] keys, DoubleHistogram merged, boolean keyed,
-            Map<String, Object> metadata) {
+    protected AbstractInternalHDRPercentiles createReduced(
+        String name,
+        double[] keys,
+        DoubleHistogram merged,
+        boolean keyed,
+        Map<String, Object> metadata
+    ) {
         return new InternalHDRPercentileRanks(name, keys, merged, keyed, format, metadata);
     }
 
     public static double percentileRank(DoubleHistogram state, double value) {
-        if (state.getTotalCount() == 0) {
+        if (state == null || state.getTotalCount() == 0) {
             return Double.NaN;
         }
         double percentileRank = state.getPercentileAtOrBelowValue(value);
@@ -82,7 +107,7 @@ public class InternalHDRPercentileRanks extends AbstractInternalHDRPercentiles i
 
         public Iter(double[] values, DoubleHistogram state) {
             this.values = values;
-            this.state = state;
+            this.state = Objects.requireNonNull(state);
             i = 0;
         }
 

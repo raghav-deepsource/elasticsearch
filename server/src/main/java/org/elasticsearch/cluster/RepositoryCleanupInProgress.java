@@ -7,15 +7,17 @@
  */
 package org.elasticsearch.cluster;
 
-import org.elasticsearch.Version;
+import org.elasticsearch.TransportVersion;
 import org.elasticsearch.common.Strings;
+import org.elasticsearch.common.collect.Iterators;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.io.stream.Writeable;
-import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.repositories.RepositoryOperation;
+import org.elasticsearch.xcontent.ToXContent;
 
 import java.io.IOException;
+import java.util.Iterator;
 import java.util.List;
 
 public final class RepositoryCleanupInProgress extends AbstractNamedDiffable<ClusterState.Custom> implements ClusterState.Custom {
@@ -25,6 +27,10 @@ public final class RepositoryCleanupInProgress extends AbstractNamedDiffable<Clu
     public static final String TYPE = "repository_cleanup";
 
     private final List<Entry> entries;
+
+    public static RepositoryCleanupInProgress get(ClusterState state) {
+        return state.custom(TYPE, EMPTY);
+    }
 
     public RepositoryCleanupInProgress(List<Entry> entries) {
         this.entries = entries;
@@ -58,21 +64,21 @@ public final class RepositoryCleanupInProgress extends AbstractNamedDiffable<Clu
 
     @Override
     public void writeTo(StreamOutput out) throws IOException {
-        out.writeList(entries);
+        out.writeCollection(entries);
     }
 
     @Override
-    public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
-        builder.startArray(TYPE);
-        for (Entry entry : entries) {
-            builder.startObject();
-            {
+    public Iterator<? extends ToXContent> toXContentChunked(ToXContent.Params ignored) {
+        return Iterators.concat(
+            Iterators.single((builder, params) -> builder.startArray(TYPE)),
+            Iterators.map(entries.iterator(), entry -> (builder, params) -> {
+                builder.startObject();
                 builder.field("repository", entry.repository);
-            }
-            builder.endObject();
-        }
-        builder.endArray();
-        return builder;
+                builder.endObject();
+                return builder;
+            }),
+            Iterators.single((builder, params) -> builder.endArray())
+        );
     }
 
     @Override
@@ -81,8 +87,8 @@ public final class RepositoryCleanupInProgress extends AbstractNamedDiffable<Clu
     }
 
     @Override
-    public Version getMinimalSupportedVersion() {
-        return Version.V_7_4_0;
+    public TransportVersion getMinimalSupportedVersion() {
+        return TransportVersion.V_7_4_0;
     }
 
     public static final class Entry implements Writeable, RepositoryOperation {

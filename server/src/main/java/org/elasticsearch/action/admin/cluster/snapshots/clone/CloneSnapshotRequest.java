@@ -15,8 +15,8 @@ import org.elasticsearch.action.support.master.MasterNodeRequest;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
-import org.elasticsearch.common.xcontent.ToXContentObject;
-import org.elasticsearch.common.xcontent.XContentBuilder;
+import org.elasticsearch.xcontent.ToXContentObject;
+import org.elasticsearch.xcontent.XContentBuilder;
 
 import java.io.IOException;
 
@@ -139,11 +139,7 @@ public class CloneSnapshotRequest extends MasterNodeRequest<CloneSnapshotRequest
         builder.field("source", source);
         builder.field("target", target);
         if (indices != null) {
-            builder.startArray("indices");
-            for (String index : indices) {
-                builder.value(index);
-            }
-            builder.endArray();
+            builder.array("indices", indices);
         }
         if (indicesOptions != null) {
             indicesOptions.toXContent(builder, params);

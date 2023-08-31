@@ -12,24 +12,26 @@ import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.elasticsearch.ElasticsearchException;
-import org.elasticsearch.Version;
+import org.elasticsearch.TransportVersion;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.support.PlainActionFuture;
 import org.elasticsearch.cluster.node.DiscoveryNode;
+import org.elasticsearch.cluster.node.DiscoveryNodeUtils;
 import org.elasticsearch.common.breaker.CircuitBreaker;
 import org.elasticsearch.common.breaker.NoopCircuitBreaker;
 import org.elasticsearch.common.bytes.BytesArray;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.bytes.ReleasableBytesReference;
-import org.elasticsearch.common.collect.Tuple;
 import org.elasticsearch.common.io.stream.BytesStreamOutput;
 import org.elasticsearch.common.logging.Loggers;
+import org.elasticsearch.common.network.HandlingTimeTracker;
+import org.elasticsearch.common.network.NetworkAddress;
 import org.elasticsearch.common.transport.TransportAddress;
-import org.elasticsearch.common.unit.TimeValue;
-import org.elasticsearch.common.util.BigArrays;
 import org.elasticsearch.common.util.PageCacheRecycler;
 import org.elasticsearch.common.util.concurrent.ThreadContext;
-import org.elasticsearch.core.internal.io.Streams;
+import org.elasticsearch.core.Streams;
+import org.elasticsearch.core.TimeValue;
+import org.elasticsearch.core.Tuple;
 import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.test.MockLogAppender;
 import org.elasticsearch.threadpool.TestThreadPool;
@@ -47,6 +49,8 @@ import java.util.function.LongSupplier;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 
+import static org.hamcrest.Matchers.allOf;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.instanceOf;
 
 public class OutboundHandlerTests extends ESTestCase {
@@ -54,33 +58,43 @@ public class OutboundHandlerTests extends ESTestCase {
     private final TestThreadPool threadPool = new TestThreadPool(getClass().getName());
     private final TransportRequestOptions options = TransportRequestOptions.EMPTY;
     private final AtomicReference<Tuple<Header, BytesReference>> message = new AtomicReference<>();
+    private final BytesRefRecycler recycler = new BytesRefRecycler(PageCacheRecycler.NON_RECYCLING_INSTANCE);
     private InboundPipeline pipeline;
     private OutboundHandler handler;
     private FakeTcpChannel channel;
     private DiscoveryNode node;
+    private Compression.Scheme compressionScheme;
 
     @Before
     public void setUp() throws Exception {
         super.setUp();
         channel = new FakeTcpChannel(randomBoolean(), buildNewFakeTransportAddress().address(), buildNewFakeTransportAddress().address());
         TransportAddress transportAddress = buildNewFakeTransportAddress();
-        node = new DiscoveryNode("", transportAddress, Version.CURRENT);
+        node = DiscoveryNodeUtils.create("", transportAddress);
         StatsTracker statsTracker = new StatsTracker();
-        handler = new OutboundHandler("node", Version.CURRENT, statsTracker, threadPool, BigArrays.NON_RECYCLING_INSTANCE);
+        compressionScheme = randomFrom(Compression.Scheme.DEFLATE, Compression.Scheme.LZ4);
+        handler = new OutboundHandler(
+            "node",
+            TransportVersion.current(),
+            statsTracker,
+            threadPool,
+            recycler,
+            new HandlingTimeTracker(),
+            false
+        );
 
         final LongSupplier millisSupplier = () -> TimeValue.nsecToMSec(System.nanoTime());
-        final InboundDecoder decoder = new InboundDecoder(Version.CURRENT, PageCacheRecycler.NON_RECYCLING_INSTANCE);
+        final InboundDecoder decoder = new InboundDecoder(this.recycler);
         final Supplier<CircuitBreaker> breaker = () -> new NoopCircuitBreaker("test");
         final InboundAggregator aggregator = new InboundAggregator(breaker, (Predicate<String>) action -> true);
-        pipeline = new InboundPipeline(statsTracker, millisSupplier, decoder, aggregator,
-            (c, m) -> {
-                try (BytesStreamOutput streamOutput = new BytesStreamOutput()) {
-                    Streams.copy(m.openOrGetStreamInput(), streamOutput);
-                    message.set(new Tuple<>(m.getHeader(), streamOutput.bytes()));
-                } catch (IOException e) {
-                    throw new AssertionError(e);
-                }
-            });
+        pipeline = new InboundPipeline(statsTracker, millisSupplier, decoder, aggregator, (c, m) -> {
+            try (BytesStreamOutput streamOutput = new BytesStreamOutput()) {
+                Streams.copy(m.openOrGetStreamInput(), streamOutput);
+                message.set(new Tuple<>(m.getHeader(), streamOutput.bytes()));
+            } catch (IOException e) {
+                throw new AssertionError(e);
+            }
+        });
     }
 
     @After
@@ -115,7 +129,7 @@ public class OutboundHandlerTests extends ESTestCase {
 
     public void testSendRequest() throws IOException {
         ThreadContext threadContext = threadPool.getThreadContext();
-        Version version = randomFrom(Version.CURRENT, Version.CURRENT.minimumCompatibilityVersion());
+        TransportVersion version = TransportHandshaker.REQUEST_HANDSHAKE_VERSION;
         String action = "handshake";
         long requestId = randomLongBetween(0, 300);
         boolean isHandshake = randomBoolean();
@@ -130,15 +144,24 @@ public class OutboundHandlerTests extends ESTestCase {
         AtomicReference<TransportRequest> requestRef = new AtomicReference<>();
         handler.setMessageListener(new TransportMessageListener() {
             @Override
-            public void onRequestSent(DiscoveryNode node, long requestId, String action, TransportRequest request,
-                                      TransportRequestOptions options) {
+            public void onRequestSent(
+                DiscoveryNode node,
+                long requestId,
+                String action,
+                TransportRequest request,
+                TransportRequestOptions options
+            ) {
                 nodeRef.set(node);
                 requestIdRef.set(requestId);
                 actionRef.set(action);
                 requestRef.set(request);
             }
         });
-        handler.sendRequest(node, channel, requestId, action, request, options, version, compress, isHandshake);
+        if (compress) {
+            handler.sendRequest(node, channel, requestId, action, request, options, version, compressionScheme, isHandshake);
+        } else {
+            handler.sendRequest(node, channel, requestId, action, request, options, version, null, isHandshake);
+        }
 
         BytesReference reference = channel.getMessageCaptor().get();
         ActionListener<Void> sendListener = channel.getListenerCaptor().get();
@@ -152,8 +175,7 @@ public class OutboundHandlerTests extends ESTestCase {
         assertEquals(action, actionRef.get());
         assertEquals(request, requestRef.get());
 
-        pipeline.handleBytes(channel, new ReleasableBytesReference(reference, () -> {
-        }));
+        pipeline.handleBytes(channel, new ReleasableBytesReference(reference, () -> {}));
         final Tuple<Header, BytesReference> tuple = message.get();
         final Header header = tuple.v1();
         final TestRequest message = new TestRequest(tuple.v2().streamInput());
@@ -178,11 +200,12 @@ public class OutboundHandlerTests extends ESTestCase {
 
     public void testSendResponse() throws IOException {
         ThreadContext threadContext = threadPool.getThreadContext();
-        Version version = randomFrom(Version.CURRENT, Version.CURRENT.minimumCompatibilityVersion());
+        TransportVersion version = TransportHandshaker.REQUEST_HANDSHAKE_VERSION;
         String action = "handshake";
         long requestId = randomLongBetween(0, 300);
         boolean isHandshake = randomBoolean();
         boolean compress = randomBoolean();
+
         String value = "message";
         threadContext.putHeader("header", "header_value");
         TestResponse response = new TestResponse(value);
@@ -198,7 +221,11 @@ public class OutboundHandlerTests extends ESTestCase {
                 responseRef.set(response);
             }
         });
-        handler.sendResponse(version, channel, requestId, action, response, compress, isHandshake);
+        if (compress) {
+            handler.sendResponse(version, channel, requestId, action, response, compressionScheme, isHandshake, ResponseStatsConsumer.NONE);
+        } else {
+            handler.sendResponse(version, channel, requestId, action, response, null, isHandshake, ResponseStatsConsumer.NONE);
+        }
 
         BytesReference reference = channel.getMessageCaptor().get();
         ActionListener<Void> sendListener = channel.getListenerCaptor().get();
@@ -211,8 +238,7 @@ public class OutboundHandlerTests extends ESTestCase {
         assertEquals(action, actionRef.get());
         assertEquals(response, responseRef.get());
 
-        pipeline.handleBytes(channel, new ReleasableBytesReference(reference, () -> {
-        }));
+        pipeline.handleBytes(channel, new ReleasableBytesReference(reference, () -> {}));
         final Tuple<Header, BytesReference> tuple = message.get();
         final Header header = tuple.v1();
         final TestResponse message = new TestResponse(tuple.v2().streamInput());
@@ -239,7 +265,7 @@ public class OutboundHandlerTests extends ESTestCase {
 
     public void testErrorResponse() throws IOException {
         ThreadContext threadContext = threadPool.getThreadContext();
-        Version version = randomFrom(Version.CURRENT, Version.CURRENT.minimumCompatibilityVersion());
+        TransportVersion version = TransportHandshaker.REQUEST_HANDSHAKE_VERSION;
         String action = "handshake";
         long requestId = randomLongBetween(0, 300);
         threadContext.putHeader("header", "header_value");
@@ -256,7 +282,7 @@ public class OutboundHandlerTests extends ESTestCase {
                 responseRef.set(error);
             }
         });
-        handler.sendErrorResponse(version, channel, requestId, action, error);
+        handler.sendErrorResponse(version, channel, requestId, action, ResponseStatsConsumer.NONE, error);
 
         BytesReference reference = channel.getMessageCaptor().get();
         ActionListener<Void> sendListener = channel.getListenerCaptor().get();
@@ -269,9 +295,7 @@ public class OutboundHandlerTests extends ESTestCase {
         assertEquals(action, actionRef.get());
         assertEquals(error, responseRef.get());
 
-
-        pipeline.handleBytes(channel, new ReleasableBytesReference(reference, () -> {
-        }));
+        pipeline.handleBytes(channel, new ReleasableBytesReference(reference, () -> {}));
         final Tuple<Header, BytesReference> tuple = message.get();
         final Header header = tuple.v1();
         assertEquals(version, header.getVersion());
@@ -285,8 +309,10 @@ public class OutboundHandlerTests extends ESTestCase {
         RemoteTransportException remoteException = tuple.v2().streamInput().readException();
         assertThat(remoteException.getCause(), instanceOf(ElasticsearchException.class));
         assertEquals(remoteException.getCause().getMessage(), "boom");
-        assertEquals(action, remoteException.action());
-        assertEquals(channel.getLocalAddress(), remoteException.address().address());
+        assertThat(
+            remoteException.getMessage(),
+            allOf(containsString('[' + NetworkAddress.format(channel.getLocalAddress()) + ']'), containsString('[' + action + ']'))
+        );
 
         assertEquals("header_value", header.getHeaders().v1().get("header"));
     }
@@ -295,11 +321,13 @@ public class OutboundHandlerTests extends ESTestCase {
         final MockLogAppender mockAppender = new MockLogAppender();
         mockAppender.start();
         mockAppender.addExpectation(
-                new MockLogAppender.SeenEventExpectation(
-                        "expected message",
-                        OutboundHandler.class.getCanonicalName(),
-                        Level.WARN,
-                        "sending transport message "));
+            new MockLogAppender.SeenEventExpectation(
+                "expected message",
+                OutboundHandler.class.getCanonicalName(),
+                Level.WARN,
+                "sending transport message "
+            )
+        );
         final Logger outboundHandlerLogger = LogManager.getLogger(OutboundHandler.class);
         Loggers.addAppender(outboundHandlerLogger, mockAppender);
         handler.setSlowLogThreshold(TimeValue.timeValueMillis(5L));

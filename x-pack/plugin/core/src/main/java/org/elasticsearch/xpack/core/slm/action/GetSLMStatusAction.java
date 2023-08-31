@@ -13,8 +13,8 @@ import org.elasticsearch.action.ActionType;
 import org.elasticsearch.action.support.master.AcknowledgedRequest;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
-import org.elasticsearch.common.xcontent.ToXContentObject;
-import org.elasticsearch.common.xcontent.XContentBuilder;
+import org.elasticsearch.xcontent.ToXContentObject;
+import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xpack.core.ilm.OperationMode;
 
 import java.io.IOException;
@@ -29,7 +29,7 @@ public class GetSLMStatusAction extends ActionType<GetSLMStatusAction.Response> 
 
     public static class Response extends ActionResponse implements ToXContentObject {
 
-        private OperationMode mode;
+        private final OperationMode mode;
 
         public Response(StreamInput in) throws IOException {
             super(in);
@@ -43,6 +43,10 @@ public class GetSLMStatusAction extends ActionType<GetSLMStatusAction.Response> 
         @Override
         public void writeTo(StreamOutput out) throws IOException {
             out.writeEnum(this.mode);
+        }
+
+        public OperationMode getOperationMode() {
+            return this.mode;
         }
 
         @Override
@@ -60,8 +64,7 @@ public class GetSLMStatusAction extends ActionType<GetSLMStatusAction.Response> 
             super(in);
         }
 
-        public Request() {
-        }
+        public Request() {}
 
         @Override
         public ActionRequestValidationException validate() {

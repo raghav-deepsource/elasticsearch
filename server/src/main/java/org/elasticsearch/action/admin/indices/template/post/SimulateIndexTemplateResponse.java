@@ -8,17 +8,19 @@
 
 package org.elasticsearch.action.admin.indices.template.post;
 
+import org.elasticsearch.TransportVersion;
 import org.elasticsearch.action.ActionResponse;
+import org.elasticsearch.action.admin.indices.rollover.RolloverConfiguration;
 import org.elasticsearch.cluster.metadata.Template;
-import org.elasticsearch.common.Nullable;
-import org.elasticsearch.common.ParseField;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
-import org.elasticsearch.common.xcontent.ToXContentObject;
-import org.elasticsearch.common.xcontent.XContentBuilder;
+import org.elasticsearch.common.util.Maps;
+import org.elasticsearch.core.Nullable;
+import org.elasticsearch.xcontent.ParseField;
+import org.elasticsearch.xcontent.ToXContentObject;
+import org.elasticsearch.xcontent.XContentBuilder;
 
 import java.io.IOException;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -41,9 +43,21 @@ public class SimulateIndexTemplateResponse extends ActionResponse implements ToX
     // a map of template names and their index patterns that would overlap when matching the given index name
     private Map<String, List<String>> overlappingTemplates;
 
+    @Nullable
+    private RolloverConfiguration rolloverConfiguration = null;
+
     public SimulateIndexTemplateResponse(@Nullable Template resolvedTemplate, @Nullable Map<String, List<String>> overlappingTemplates) {
+        this(resolvedTemplate, overlappingTemplates, null);
+    }
+
+    public SimulateIndexTemplateResponse(
+        @Nullable Template resolvedTemplate,
+        @Nullable Map<String, List<String>> overlappingTemplates,
+        @Nullable RolloverConfiguration rolloverConfiguration
+    ) {
         this.resolvedTemplate = resolvedTemplate;
         this.overlappingTemplates = overlappingTemplates;
+        this.rolloverConfiguration = rolloverConfiguration;
     }
 
     public SimulateIndexTemplateResponse(StreamInput in) throws IOException {
@@ -51,13 +65,16 @@ public class SimulateIndexTemplateResponse extends ActionResponse implements ToX
         resolvedTemplate = in.readOptionalWriteable(Template::new);
         if (in.readBoolean()) {
             int overlappingTemplatesCount = in.readInt();
-            overlappingTemplates = new HashMap<>(overlappingTemplatesCount, 1L);
+            overlappingTemplates = Maps.newMapWithExpectedSize(overlappingTemplatesCount);
             for (int i = 0; i < overlappingTemplatesCount; i++) {
                 String templateName = in.readString();
                 overlappingTemplates.put(templateName, in.readStringList());
             }
         } else {
             this.overlappingTemplates = null;
+        }
+        if (in.getTransportVersion().onOrAfter(TransportVersion.V_8_500_010)) {
+            rolloverConfiguration = in.readOptionalWriteable(RolloverConfiguration::new);
         }
     }
 
@@ -74,20 +91,24 @@ public class SimulateIndexTemplateResponse extends ActionResponse implements ToX
         } else {
             out.writeBoolean(false);
         }
+        if (out.getTransportVersion().onOrAfter(TransportVersion.V_8_500_010)) {
+            out.writeOptionalWriteable(rolloverConfiguration);
+        }
     }
 
     @Override
     public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
         builder.startObject();
         if (this.resolvedTemplate != null) {
-            builder.field(TEMPLATE.getPreferredName(), this.resolvedTemplate);
+            builder.field(TEMPLATE.getPreferredName());
+            this.resolvedTemplate.toXContent(builder, params, rolloverConfiguration);
         }
         if (this.overlappingTemplates != null) {
             builder.startArray(OVERLAPPING.getPreferredName());
             for (Map.Entry<String, List<String>> entry : overlappingTemplates.entrySet()) {
                 builder.startObject();
                 builder.field(NAME.getPreferredName(), entry.getKey());
-                builder.field(INDEX_PATTERNS.getPreferredName(), entry.getValue());
+                builder.stringListField(INDEX_PATTERNS.getPreferredName(), entry.getValue());
                 builder.endObject();
             }
             builder.endArray();
@@ -116,7 +137,11 @@ public class SimulateIndexTemplateResponse extends ActionResponse implements ToX
 
     @Override
     public String toString() {
-        return "SimulateIndexTemplateResponse{" + "resolved template=" + resolvedTemplate + ", overlapping templates="
-            + String.join("|", overlappingTemplates.keySet()) + "}";
+        return "SimulateIndexTemplateResponse{"
+            + "resolved template="
+            + resolvedTemplate
+            + ", overlapping templates="
+            + String.join("|", overlappingTemplates.keySet())
+            + "}";
     }
 }

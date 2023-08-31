@@ -9,21 +9,17 @@
 package org.elasticsearch.discovery;
 
 import org.apache.logging.log4j.Level;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
-import org.elasticsearch.Version;
+import org.elasticsearch.TransportVersion;
 import org.elasticsearch.action.support.PlainActionFuture;
 import org.elasticsearch.common.io.stream.NamedWriteableRegistry;
-import org.elasticsearch.common.logging.Loggers;
 import org.elasticsearch.common.network.NetworkAddress;
 import org.elasticsearch.common.network.NetworkService;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.transport.BoundTransportAddress;
 import org.elasticsearch.common.transport.TransportAddress;
 import org.elasticsearch.common.util.PageCacheRecycler;
-import org.elasticsearch.common.util.concurrent.EsExecutors;
 import org.elasticsearch.common.util.concurrent.FutureUtils;
-import org.elasticsearch.core.internal.io.IOUtils;
+import org.elasticsearch.core.IOUtils;
 import org.elasticsearch.indices.breaker.NoneCircuitBreakerService;
 import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.test.MockLogAppender;
@@ -31,7 +27,8 @@ import org.elasticsearch.threadpool.TestThreadPool;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.Transport;
 import org.elasticsearch.transport.TransportService;
-import org.elasticsearch.transport.nio.MockNioTransport;
+import org.elasticsearch.transport.netty4.Netty4Transport;
+import org.elasticsearch.transport.netty4.SharedGroupFactory;
 import org.junit.After;
 import org.junit.Before;
 
@@ -47,8 +44,6 @@ import java.util.List;
 import java.util.Set;
 import java.util.Stack;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
@@ -66,26 +61,18 @@ public class SeedHostsResolverTests extends ESTestCase {
     private List<TransportAddress> transportAddresses;
     private SeedHostsResolver seedHostsResolver;
     private ThreadPool threadPool;
-    private ExecutorService executorService;
     // close in reverse order as opened
     private Stack<Closeable> closeables;
-
 
     @Before
     public void startResolver() {
         threadPool = new TestThreadPool("node");
         transportAddresses = new ArrayList<>();
+        closeables = new Stack<>();
 
         TransportService transportService = mock(TransportService.class);
         when(transportService.getThreadPool()).thenReturn(threadPool);
-
         recreateSeedHostsResolver(transportService);
-
-        final ThreadFactory threadFactory = EsExecutors.daemonThreadFactory("[" + getClass().getName() + "]");
-        executorService =
-            EsExecutors.newScaling(
-                getClass().getName() + "/" + getTestName(), 0, 2, 60, TimeUnit.SECONDS, threadFactory, threadPool.getThreadContext());
-        closeables = new Stack<>();
     }
 
     private void recreateSeedHostsResolver(TransportService transportService) {
@@ -112,7 +99,6 @@ public class SeedHostsResolverTests extends ESTestCase {
             }
             IOUtils.close(reverse);
         } finally {
-            terminate(executorService);
             terminate(threadPool);
         }
     }
@@ -137,9 +123,7 @@ public class SeedHostsResolverTests extends ESTestCase {
             endLatch.countDown();
         });
 
-        seedHostsResolver.resolveConfiguredHosts(resolvedAddresses -> {
-            throw new AssertionError("unexpected concurrent resolution");
-        });
+        seedHostsResolver.resolveConfiguredHosts(resolvedAddresses -> { throw new AssertionError("unexpected concurrent resolution"); });
 
         assertThat(resolvedAddressesRef.get(), nullValue());
         startLatch.countDown();
@@ -150,35 +134,38 @@ public class SeedHostsResolverTests extends ESTestCase {
     public void testRemovingLocalAddresses() {
         final NetworkService networkService = new NetworkService(Collections.emptyList());
         final InetAddress loopbackAddress = InetAddress.getLoopbackAddress();
-        final Transport transport = new MockNioTransport(
+        final Transport transport = new Netty4Transport(
             Settings.EMPTY,
-            Version.CURRENT,
+            TransportVersion.current(),
             threadPool,
             networkService,
             PageCacheRecycler.NON_RECYCLING_INSTANCE,
             new NamedWriteableRegistry(Collections.emptyList()),
-            new NoneCircuitBreakerService()) {
+            new NoneCircuitBreakerService(),
+            new SharedGroupFactory(Settings.EMPTY)
+        ) {
 
             @Override
             public BoundTransportAddress boundAddress() {
                 return new BoundTransportAddress(
-                    new TransportAddress[]{
-                        new TransportAddress(loopbackAddress, 9300),
-                        new TransportAddress(loopbackAddress, 9301)
-                    },
+                    new TransportAddress[] { new TransportAddress(loopbackAddress, 9300), new TransportAddress(loopbackAddress, 9301) },
                     new TransportAddress(loopbackAddress, 9302)
                 );
             }
         };
         closeables.push(transport);
-        final TransportService transportService =
-            new TransportService(Settings.EMPTY, transport, threadPool, TransportService.NOOP_TRANSPORT_INTERCEPTOR, x -> null, null,
-                Collections.emptySet());
+        final TransportService transportService = new TransportService(
+            Settings.EMPTY,
+            transport,
+            threadPool,
+            TransportService.NOOP_TRANSPORT_INTERCEPTOR,
+            x -> null,
+            null,
+            Collections.emptySet()
+        );
         closeables.push(transportService);
         recreateSeedHostsResolver(transportService);
-        List<String> hosts = IntStream.range(9300, 9310)
-            .mapToObj(port -> NetworkAddress.format(loopbackAddress) + ":" + port)
-            .collect(Collectors.toList());
+        List<String> hosts = IntStream.range(9300, 9310).mapToObj(port -> NetworkAddress.format(loopbackAddress) + ":" + port).toList();
         final List<TransportAddress> transportAddresses = seedHostsResolver.resolveHosts(hosts);
         assertThat(transportAddresses, hasSize(7));
         final Set<Integer> ports = new HashSet<>();
@@ -189,23 +176,25 @@ public class SeedHostsResolverTests extends ESTestCase {
         assertThat(ports, equalTo(IntStream.range(9303, 9310).boxed().collect(Collectors.toSet())));
     }
 
-    public void testUnknownHost() throws IllegalAccessException {
+    public void testUnknownHost() {
         final NetworkService networkService = new NetworkService(Collections.emptyList());
         final String hostname = randomAlphaOfLength(8);
         final UnknownHostException unknownHostException = new UnknownHostException(hostname);
-        final Transport transport = new MockNioTransport(
+        final Transport transport = new Netty4Transport(
             Settings.EMPTY,
-            Version.CURRENT,
+            TransportVersion.current(),
             threadPool,
             networkService,
             PageCacheRecycler.NON_RECYCLING_INSTANCE,
             new NamedWriteableRegistry(Collections.emptyList()),
-            new NoneCircuitBreakerService()) {
+            new NoneCircuitBreakerService(),
+            new SharedGroupFactory(Settings.EMPTY)
+        ) {
 
             @Override
             public BoundTransportAddress boundAddress() {
                 return new BoundTransportAddress(
-                    new TransportAddress[]{new TransportAddress(InetAddress.getLoopbackAddress(), 9300)},
+                    new TransportAddress[] { new TransportAddress(InetAddress.getLoopbackAddress(), 9300) },
                     new TransportAddress(InetAddress.getLoopbackAddress(), 9300)
                 );
             }
@@ -218,52 +207,54 @@ public class SeedHostsResolverTests extends ESTestCase {
         };
         closeables.push(transport);
 
-        final TransportService transportService =
-            new TransportService(Settings.EMPTY, transport, threadPool, TransportService.NOOP_TRANSPORT_INTERCEPTOR, x -> null, null,
-                Collections.emptySet());
+        final TransportService transportService = new TransportService(
+            Settings.EMPTY,
+            transport,
+            threadPool,
+            TransportService.NOOP_TRANSPORT_INTERCEPTOR,
+            x -> null,
+            null,
+            Collections.emptySet()
+        );
         closeables.push(transportService);
         recreateSeedHostsResolver(transportService);
 
-        final Logger logger = LogManager.getLogger(SeedHostsResolver.class);
         final MockLogAppender appender = new MockLogAppender();
-        appender.start();
         appender.addExpectation(
             new MockLogAppender.ExceptionSeenEventExpectation(
                 getTestName(),
-                logger.getName(),
+                SeedHostsResolver.class.getCanonicalName(),
                 Level.WARN,
                 "failed to resolve host [" + hostname + "]",
                 UnknownHostException.class,
-                unknownHostException.getMessage()));
+                unknownHostException.getMessage()
+            )
+        );
 
-        try {
-            Loggers.addAppender(logger, appender);
-            final List<TransportAddress> transportAddresses = seedHostsResolver.resolveHosts(Collections.singletonList(hostname));
-
-            assertThat(transportAddresses, empty());
+        try (var ignored = appender.capturing(SeedHostsResolver.class)) {
+            assertThat(seedHostsResolver.resolveHosts(Collections.singletonList(hostname)), empty());
             appender.assertAllExpectationsMatched();
-        } finally {
-            Loggers.removeAppender(logger, appender);
-            appender.stop();
         }
     }
 
-    public void testResolveTimeout() throws IllegalAccessException {
+    public void testResolveTimeout() {
         final NetworkService networkService = new NetworkService(Collections.emptyList());
         final CountDownLatch latch = new CountDownLatch(1);
-        final Transport transport = new MockNioTransport(
+        final Transport transport = new Netty4Transport(
             Settings.EMPTY,
-            Version.CURRENT,
+            TransportVersion.current(),
             threadPool,
             networkService,
             PageCacheRecycler.NON_RECYCLING_INSTANCE,
             new NamedWriteableRegistry(Collections.emptyList()),
-            new NoneCircuitBreakerService()) {
+            new NoneCircuitBreakerService(),
+            new SharedGroupFactory(Settings.EMPTY)
+        ) {
 
             @Override
             public BoundTransportAddress boundAddress() {
                 return new BoundTransportAddress(
-                    new TransportAddress[]{new TransportAddress(InetAddress.getLoopbackAddress(), 9500)},
+                    new TransportAddress[] { new TransportAddress(InetAddress.getLoopbackAddress(), 9500) },
                     new TransportAddress(InetAddress.getLoopbackAddress(), 9500)
                 );
             }
@@ -271,11 +262,11 @@ public class SeedHostsResolverTests extends ESTestCase {
             @Override
             public TransportAddress[] addressesFromString(String address) throws UnknownHostException {
                 if ("hostname1".equals(address)) {
-                    return new TransportAddress[]{new TransportAddress(TransportAddress.META_ADDRESS, 9300)};
+                    return new TransportAddress[] { new TransportAddress(TransportAddress.META_ADDRESS, 9300) };
                 } else if ("hostname2".equals(address)) {
                     try {
                         latch.await();
-                        return new TransportAddress[]{new TransportAddress(TransportAddress.META_ADDRESS, 9300)};
+                        return new TransportAddress[] { new TransportAddress(TransportAddress.META_ADDRESS, 9300) };
                     } catch (InterruptedException e) {
                         throw new RuntimeException(e);
                     }
@@ -287,31 +278,34 @@ public class SeedHostsResolverTests extends ESTestCase {
         };
         closeables.push(transport);
 
-        final TransportService transportService =
-            new TransportService(Settings.EMPTY, transport, threadPool, TransportService.NOOP_TRANSPORT_INTERCEPTOR, x -> null, null,
-                Collections.emptySet());
+        final TransportService transportService = new TransportService(
+            Settings.EMPTY,
+            transport,
+            threadPool,
+            TransportService.NOOP_TRANSPORT_INTERCEPTOR,
+            x -> null,
+            null,
+            Collections.emptySet()
+        );
         closeables.push(transportService);
         recreateSeedHostsResolver(transportService);
 
-        final Logger logger = LogManager.getLogger(SeedHostsResolver.class);
         final MockLogAppender appender = new MockLogAppender();
-        appender.start();
         appender.addExpectation(
             new MockLogAppender.SeenEventExpectation(
                 getTestName(),
-                logger.getName(),
+                SeedHostsResolver.class.getCanonicalName(),
                 Level.WARN,
-                "timed out after [" + SeedHostsResolver.getResolveTimeout(Settings.EMPTY) + "] resolving host [hostname2]"));
+                "timed out after [*] ([discovery.seed_resolver.timeout]=["
+                    + SeedHostsResolver.getResolveTimeout(Settings.EMPTY)
+                    + "]) resolving host [hostname2]"
+            )
+        );
 
-        try {
-            Loggers.addAppender(logger, appender);
-            final List<TransportAddress> transportAddresses = seedHostsResolver.resolveHosts(Arrays.asList("hostname1", "hostname2"));
-
-            assertThat(transportAddresses, hasSize(1));
+        try (var ignored = appender.capturing(SeedHostsResolver.class)) {
+            assertThat(seedHostsResolver.resolveHosts(Arrays.asList("hostname1", "hostname2")), hasSize(1));
             appender.assertAllExpectationsMatched();
         } finally {
-            Loggers.removeAppender(logger, appender);
-            appender.stop();
             latch.countDown();
         }
     }
@@ -320,19 +314,21 @@ public class SeedHostsResolverTests extends ESTestCase {
         final NetworkService networkService = new NetworkService(Collections.emptyList());
         final CountDownLatch latch = new CountDownLatch(1);
         final CountDownLatch conditionLatch = new CountDownLatch(1);
-        final Transport transport = new MockNioTransport(
+        final Transport transport = new Netty4Transport(
             Settings.EMPTY,
-            Version.CURRENT,
+            TransportVersion.current(),
             threadPool,
             networkService,
             PageCacheRecycler.NON_RECYCLING_INSTANCE,
             new NamedWriteableRegistry(Collections.emptyList()),
-            new NoneCircuitBreakerService()) {
+            new NoneCircuitBreakerService(),
+            new SharedGroupFactory(Settings.EMPTY)
+        ) {
 
             @Override
             public BoundTransportAddress boundAddress() {
                 return new BoundTransportAddress(
-                    new TransportAddress[]{new TransportAddress(InetAddress.getLoopbackAddress(), 9500)},
+                    new TransportAddress[] { new TransportAddress(InetAddress.getLoopbackAddress(), 9500) },
                     new TransportAddress(InetAddress.getLoopbackAddress(), 9500)
                 );
             }
@@ -340,7 +336,7 @@ public class SeedHostsResolverTests extends ESTestCase {
             @Override
             public TransportAddress[] addressesFromString(String address) throws UnknownHostException {
                 if ("hostname1".equals(address)) {
-                    return new TransportAddress[]{new TransportAddress(TransportAddress.META_ADDRESS, 9300)};
+                    return new TransportAddress[] { new TransportAddress(TransportAddress.META_ADDRESS, 9300) };
                 } else if ("hostname2".equals(address)) {
                     try {
                         conditionLatch.countDown();
@@ -357,12 +353,20 @@ public class SeedHostsResolverTests extends ESTestCase {
         };
         closeables.push(transport);
 
-        final TransportService transportService =
-            new TransportService(Settings.EMPTY, transport, threadPool, TransportService.NOOP_TRANSPORT_INTERCEPTOR, x -> null, null,
-                Collections.emptySet());
+        final TransportService transportService = new TransportService(
+            Settings.EMPTY,
+            transport,
+            threadPool,
+            TransportService.NOOP_TRANSPORT_INTERCEPTOR,
+            x -> null,
+            null,
+            Collections.emptySet()
+        );
         closeables.push(transportService);
-        recreateSeedHostsResolver(transportService,
-            Settings.builder().put(SeedHostsResolver.DISCOVERY_SEED_RESOLVER_TIMEOUT_SETTING.getKey(), "10m").build());
+        recreateSeedHostsResolver(
+            transportService,
+            Settings.builder().put(SeedHostsResolver.DISCOVERY_SEED_RESOLVER_TIMEOUT_SETTING.getKey(), "10m").build()
+        );
 
         final PlainActionFuture<List<TransportAddress>> fut = new PlainActionFuture<>();
         threadPool.generic().execute((() -> fut.onResponse(seedHostsResolver.resolveHosts(Arrays.asList("hostname1", "hostname2")))));
@@ -372,53 +376,57 @@ public class SeedHostsResolverTests extends ESTestCase {
         assertThat(FutureUtils.get(fut, 10, TimeUnit.SECONDS), hasSize(0));
     }
 
-    public void testInvalidHosts() throws IllegalAccessException {
-        final Transport transport = new MockNioTransport(
+    public void testInvalidHosts() {
+        final Transport transport = new Netty4Transport(
             Settings.EMPTY,
-            Version.CURRENT,
+            TransportVersion.current(),
             threadPool,
             new NetworkService(Collections.emptyList()),
             PageCacheRecycler.NON_RECYCLING_INSTANCE,
             new NamedWriteableRegistry(Collections.emptyList()),
-            new NoneCircuitBreakerService()) {
+            new NoneCircuitBreakerService(),
+            new SharedGroupFactory(Settings.EMPTY)
+        ) {
             @Override
             public BoundTransportAddress boundAddress() {
                 return new BoundTransportAddress(
-                    new TransportAddress[]{new TransportAddress(InetAddress.getLoopbackAddress(), 9300)},
+                    new TransportAddress[] { new TransportAddress(InetAddress.getLoopbackAddress(), 9300) },
                     new TransportAddress(InetAddress.getLoopbackAddress(), 9300)
                 );
             }
         };
         closeables.push(transport);
 
-        final TransportService transportService =
-            new TransportService(Settings.EMPTY, transport, threadPool, TransportService.NOOP_TRANSPORT_INTERCEPTOR, x -> null, null,
-                Collections.emptySet());
+        final TransportService transportService = new TransportService(
+            Settings.EMPTY,
+            transport,
+            threadPool,
+            TransportService.NOOP_TRANSPORT_INTERCEPTOR,
+            x -> null,
+            null,
+            Collections.emptySet()
+        );
         closeables.push(transportService);
         recreateSeedHostsResolver(transportService);
 
-
-        final Logger logger = LogManager.getLogger(SeedHostsResolver.class);
         final MockLogAppender appender = new MockLogAppender();
-        appender.start();
         appender.addExpectation(
             new MockLogAppender.SeenEventExpectation(
                 getTestName(),
-                logger.getName(),
+                SeedHostsResolver.class.getCanonicalName(),
                 Level.WARN,
-                "failed to resolve host [127.0.0.1:9300:9300]"));
+                "failed to resolve host [127.0.0.1:9300:9300]"
+            )
+        );
 
-        try {
-            Loggers.addAppender(logger, appender);
+        try (var ignored = appender.capturing(SeedHostsResolver.class)) {
             final List<TransportAddress> transportAddresses = seedHostsResolver.resolveHosts(
-                Arrays.asList("127.0.0.1:9300:9300", "127.0.0.1:9301"));
+                Arrays.asList("127.0.0.1:9300:9300", "127.0.0.1:9301")
+            );
             assertThat(transportAddresses, hasSize(1)); // only one of the two is valid and will be used
             assertThat(transportAddresses.get(0).getAddress(), equalTo("127.0.0.1"));
             assertThat(transportAddresses.get(0).getPort(), equalTo(9301));
             appender.assertAllExpectationsMatched();
-        } finally {
-            Loggers.removeAppender(logger, appender);
-            appender.stop();
         }
     }
 }

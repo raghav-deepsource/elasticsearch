@@ -12,7 +12,6 @@ import org.elasticsearch.painless.lookup.PainlessLookupUtility;
 import org.objectweb.asm.commons.Method;
 
 import java.lang.invoke.MethodType;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -25,9 +24,12 @@ import java.util.Objects;
  */
 public class FunctionTable {
 
+    private static final String MANGLED_FUNCTION_NAME_PREFIX = "&";
+
     public static class LocalFunction {
 
         protected final String functionName;
+        protected final String mangledName;
         protected final Class<?> returnType;
         protected final List<Class<?>> typeParameters;
         protected final boolean isInternal;
@@ -37,11 +39,28 @@ public class FunctionTable {
         protected final Method asmMethod;
 
         public LocalFunction(
-                String functionName, Class<?> returnType, List<Class<?>> typeParameters, boolean isInternal, boolean isStatic) {
+            String functionName,
+            Class<?> returnType,
+            List<Class<?>> typeParameters,
+            boolean isInternal,
+            boolean isStatic
+        ) {
+            this(functionName, "", returnType, typeParameters, isInternal, isStatic);
+        }
+
+        private LocalFunction(
+            String functionName,
+            String mangle,
+            Class<?> returnType,
+            List<Class<?>> typeParameters,
+            boolean isInternal,
+            boolean isStatic
+        ) {
 
             this.functionName = Objects.requireNonNull(functionName);
+            this.mangledName = Objects.requireNonNull(mangle) + this.functionName;
             this.returnType = Objects.requireNonNull(returnType);
-            this.typeParameters = Collections.unmodifiableList(Objects.requireNonNull(typeParameters));
+            this.typeParameters = List.copyOf(typeParameters);
             this.isInternal = isInternal;
             this.isStatic = isStatic;
 
@@ -49,12 +68,14 @@ public class FunctionTable {
             Class<?>[] javaTypeParameters = typeParameters.stream().map(PainlessLookupUtility::typeToJavaType).toArray(Class<?>[]::new);
 
             this.methodType = MethodType.methodType(javaReturnType, javaTypeParameters);
-            this.asmMethod = new org.objectweb.asm.commons.Method(functionName,
-                    MethodType.methodType(javaReturnType, javaTypeParameters).toMethodDescriptorString());
+            this.asmMethod = new org.objectweb.asm.commons.Method(
+                mangledName,
+                MethodType.methodType(javaReturnType, javaTypeParameters).toMethodDescriptorString()
+            );
         }
 
-        public String getFunctionName() {
-            return functionName;
+        public String getMangledName() {
+            return mangledName;
         }
 
         public Class<?> getReturnType() {
@@ -95,7 +116,12 @@ public class FunctionTable {
     protected Map<String, LocalFunction> localFunctions = new HashMap<>();
 
     public LocalFunction addFunction(
-            String functionName, Class<?> returnType, List<Class<?>> typeParameters, boolean isInternal, boolean isStatic) {
+        String functionName,
+        Class<?> returnType,
+        List<Class<?>> typeParameters,
+        boolean isInternal,
+        boolean isStatic
+    ) {
 
         String functionKey = buildLocalFunctionKey(functionName, typeParameters.size());
         LocalFunction function = new LocalFunction(functionName, returnType, typeParameters, isInternal, isStatic);
@@ -103,8 +129,22 @@ public class FunctionTable {
         return function;
     }
 
-    public LocalFunction addFunction(LocalFunction function) {
-        String functionKey = buildLocalFunctionKey(function.getFunctionName(), function.getTypeParameters().size());
+    public LocalFunction addMangledFunction(
+        String functionName,
+        Class<?> returnType,
+        List<Class<?>> typeParameters,
+        boolean isInternal,
+        boolean isStatic
+    ) {
+        String functionKey = buildLocalFunctionKey(functionName, typeParameters.size());
+        LocalFunction function = new LocalFunction(
+            functionName,
+            MANGLED_FUNCTION_NAME_PREFIX,
+            returnType,
+            typeParameters,
+            isInternal,
+            isStatic
+        );
         localFunctions.put(functionKey, function);
         return function;
     }

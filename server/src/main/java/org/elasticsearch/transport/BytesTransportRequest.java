@@ -8,12 +8,12 @@
 
 package org.elasticsearch.transport;
 
-import org.elasticsearch.Version;
+import org.elasticsearch.TransportVersion;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.bytes.ReleasableBytesReference;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
-import org.elasticsearch.common.util.concurrent.RefCounted;
+import org.elasticsearch.core.RefCounted;
 
 import java.io.IOException;
 
@@ -24,20 +24,20 @@ import java.io.IOException;
 public class BytesTransportRequest extends TransportRequest implements RefCounted {
 
     final ReleasableBytesReference bytes;
-    private final Version version;
+    private final TransportVersion version;
 
     public BytesTransportRequest(StreamInput in) throws IOException {
         super(in);
         bytes = in.readReleasableBytesReference();
-        version = in.getVersion();
+        version = in.getTransportVersion();
     }
 
-    public BytesTransportRequest(BytesReference bytes, Version version) {
-        this.bytes = ReleasableBytesReference.wrap(bytes);
+    public BytesTransportRequest(ReleasableBytesReference bytes, TransportVersion version) {
+        this.bytes = bytes;
         this.version = version;
     }
 
-    public Version version() {
+    public TransportVersion version() {
         return this.version;
     }
 
@@ -67,11 +67,16 @@ public class BytesTransportRequest extends TransportRequest implements RefCounte
 
     @Override
     public boolean tryIncRef() {
-        return bytes.decRef();
+        return bytes.tryIncRef();
     }
 
     @Override
     public boolean decRef() {
         return bytes.decRef();
+    }
+
+    @Override
+    public boolean hasReferences() {
+        return bytes.hasReferences();
     }
 }

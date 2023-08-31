@@ -8,6 +8,7 @@
 
 package org.elasticsearch.search.profile.aggregation;
 
+import org.apache.lucene.search.DocIdSetIterator;
 import org.apache.lucene.search.Scorable;
 import org.elasticsearch.search.aggregations.LeafBucketCollector;
 import org.elasticsearch.search.profile.Timer;
@@ -21,7 +22,7 @@ public class ProfilingLeafBucketCollector extends LeafBucketCollector {
 
     public ProfilingLeafBucketCollector(LeafBucketCollector delegate, AggregationProfileBreakdown profileBreakdown) {
         this.delegate = delegate;
-        this.collectTimer = profileBreakdown.getTimer(AggregationTimingType.COLLECT);
+        this.collectTimer = profileBreakdown.getNewTimer(AggregationTimingType.COLLECT);
     }
 
     @Override
@@ -35,8 +36,18 @@ public class ProfilingLeafBucketCollector extends LeafBucketCollector {
     }
 
     @Override
+    public DocIdSetIterator competitiveIterator() throws IOException {
+        return delegate.competitiveIterator();
+    }
+
+    @Override
     public void setScorer(Scorable scorer) throws IOException {
         delegate.setScorer(scorer);
+    }
+
+    @Override
+    public boolean isNoop() {
+        return delegate.isNoop();
     }
 
 }

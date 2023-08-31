@@ -12,8 +12,11 @@ import org.elasticsearch.search.aggregations.Aggregator;
 import org.elasticsearch.search.aggregations.AggregatorFactories;
 import org.elasticsearch.search.aggregations.AggregatorFactory;
 import org.elasticsearch.search.aggregations.CardinalityUpperBound;
+import org.elasticsearch.search.aggregations.InternalAggregation;
+import org.elasticsearch.search.aggregations.NonCollectingAggregator;
 import org.elasticsearch.search.aggregations.support.AggregationContext;
 import org.elasticsearch.search.aggregations.support.CoreValuesSourceType;
+import org.elasticsearch.search.aggregations.support.TimeSeriesValuesSourceType;
 import org.elasticsearch.search.aggregations.support.ValuesSourceAggregatorFactory;
 import org.elasticsearch.search.aggregations.support.ValuesSourceConfig;
 import org.elasticsearch.search.aggregations.support.ValuesSourceRegistry;
@@ -26,14 +29,16 @@ class GeoBoundsAggregatorFactory extends ValuesSourceAggregatorFactory {
     private final GeoBoundsAggregatorSupplier aggregatorSupplier;
     private final boolean wrapLongitude;
 
-    GeoBoundsAggregatorFactory(String name,
-                                ValuesSourceConfig config,
-                                boolean wrapLongitude,
-                                AggregationContext context,
-                                AggregatorFactory parent,
-                                AggregatorFactories.Builder subFactoriesBuilder,
-                                Map<String, Object> metadata,
-                                GeoBoundsAggregatorSupplier aggregatorSupplier) throws IOException {
+    GeoBoundsAggregatorFactory(
+        String name,
+        ValuesSourceConfig config,
+        boolean wrapLongitude,
+        AggregationContext context,
+        AggregatorFactory parent,
+        AggregatorFactories.Builder subFactoriesBuilder,
+        Map<String, Object> metadata,
+        GeoBoundsAggregatorSupplier aggregatorSupplier
+    ) throws IOException {
         super(name, config, context, parent, subFactoriesBuilder, metadata);
         this.wrapLongitude = wrapLongitude;
         this.aggregatorSupplier = aggregatorSupplier;
@@ -41,19 +46,23 @@ class GeoBoundsAggregatorFactory extends ValuesSourceAggregatorFactory {
 
     @Override
     protected Aggregator createUnmapped(Aggregator parent, Map<String, Object> metadata) throws IOException {
-        return new GeoBoundsAggregator(name, context, parent, config, wrapLongitude, metadata);
+        final InternalAggregation empty = InternalGeoBounds.empty(name, wrapLongitude, metadata);
+        return new NonCollectingAggregator(name, context, parent, factories, metadata) {
+            @Override
+            public InternalAggregation buildEmptyAggregation() {
+                return empty;
+            }
+        };
     }
 
     @Override
-    protected Aggregator doCreateInternal(
-        Aggregator parent,
-        CardinalityUpperBound cardinality,
-        Map<String, Object> metadata
-    ) throws IOException {
+    protected Aggregator doCreateInternal(Aggregator parent, CardinalityUpperBound cardinality, Map<String, Object> metadata)
+        throws IOException {
         return aggregatorSupplier.build(name, context, parent, config, wrapLongitude, metadata);
     }
 
     static void registerAggregators(ValuesSourceRegistry.Builder builder) {
         builder.register(GeoBoundsAggregationBuilder.REGISTRY_KEY, CoreValuesSourceType.GEOPOINT, GeoBoundsAggregator::new, true);
+        builder.register(GeoBoundsAggregationBuilder.REGISTRY_KEY, TimeSeriesValuesSourceType.POSITION, GeoBoundsAggregator::new, true);
     }
 }

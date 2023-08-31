@@ -1,15 +1,3 @@
-package org.elasticsearch.script;
-
-import org.elasticsearch.ElasticsearchException;
-import org.elasticsearch.Version;
-import org.elasticsearch.common.Strings;
-import org.elasticsearch.common.io.stream.StreamInput;
-import org.elasticsearch.common.io.stream.StreamOutput;
-import org.elasticsearch.common.xcontent.ToXContent;
-import org.elasticsearch.common.xcontent.XContentBuilder;
-import org.elasticsearch.common.xcontent.XContentFactory;
-import org.elasticsearch.rest.RestStatus;
-
 /*
  * Copyright Elasticsearch B.V. and/or licensed to Elasticsearch B.V. under one
  * or more contributor license agreements. Licensed under the Elastic License
@@ -17,6 +5,18 @@ import org.elasticsearch.rest.RestStatus;
  * in compliance with, at your election, the Elastic License 2.0 or the Server
  * Side Public License, v 1.
  */
+
+package org.elasticsearch.script;
+
+import org.elasticsearch.ElasticsearchException;
+import org.elasticsearch.TransportVersion;
+import org.elasticsearch.common.Strings;
+import org.elasticsearch.common.io.stream.StreamInput;
+import org.elasticsearch.common.io.stream.StreamOutput;
+import org.elasticsearch.rest.RestStatus;
+import org.elasticsearch.xcontent.ToXContent;
+import org.elasticsearch.xcontent.XContentBuilder;
+import org.elasticsearch.xcontent.XContentFactory;
 
 import java.io.IOException;
 import java.util.Arrays;
@@ -78,7 +78,7 @@ public class ScriptException extends ElasticsearchException {
         scriptStack = Arrays.asList(in.readStringArray());
         script = in.readString();
         lang = in.readString();
-        if (in.getVersion().onOrAfter(Version.V_7_7_0) && in.readBoolean()) {
+        if (in.getTransportVersion().onOrAfter(TransportVersion.V_7_7_0) && in.readBoolean()) {
             pos = new Position(in);
         } else {
             pos = null;
@@ -86,12 +86,12 @@ public class ScriptException extends ElasticsearchException {
     }
 
     @Override
-    public void writeTo(StreamOutput out) throws IOException {
-        super.writeTo(out);
+    protected void writeTo(StreamOutput out, Writer<Throwable> nestedExceptionsWriter) throws IOException {
+        super.writeTo(out, nestedExceptionsWriter);
         out.writeStringArray(scriptStack.toArray(new String[0]));
         out.writeString(script);
         out.writeString(lang);
-        if (out.getVersion().onOrAfter(Version.V_7_7_0)) {
+        if (out.getTransportVersion().onOrAfter(TransportVersion.V_7_7_0)) {
             if (pos == null) {
                 out.writeBoolean(false);
             } else {
@@ -195,10 +195,8 @@ public class ScriptException extends ElasticsearchException {
 
         @Override
         public boolean equals(Object o) {
-            if (this == o)
-                return true;
-            if (o == null || getClass() != o.getClass())
-                return false;
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
             Position position = (Position) o;
             return offset == position.offset && start == position.start && end == position.end;
         }

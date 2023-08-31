@@ -9,8 +9,8 @@ package org.elasticsearch.xpack.core.security.action.user;
 import org.elasticsearch.action.ActionResponse;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
-import org.elasticsearch.common.xcontent.ToXContentObject;
-import org.elasticsearch.common.xcontent.XContentBuilder;
+import org.elasticsearch.xcontent.ToXContentObject;
+import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xpack.core.security.authz.permission.ResourcePrivileges;
 
 import java.io.IOException;
@@ -40,14 +40,19 @@ public class HasPrivilegesResponse extends ActionResponse implements ToXContentO
     public HasPrivilegesResponse(StreamInput in) throws IOException {
         super(in);
         completeMatch = in.readBoolean();
-        cluster = in.readMap(StreamInput::readString, StreamInput::readBoolean);
+        cluster = in.readMap(StreamInput::readBoolean);
         index = readResourcePrivileges(in);
-        application = in.readMap(StreamInput::readString, HasPrivilegesResponse::readResourcePrivileges);
+        application = in.readMap(HasPrivilegesResponse::readResourcePrivileges);
         username = in.readString();
     }
 
-    public HasPrivilegesResponse(String username, boolean completeMatch, Map<String, Boolean> cluster, Collection<ResourcePrivileges> index,
-                                 Map<String, Collection<ResourcePrivileges>> application) {
+    public HasPrivilegesResponse(
+        String username,
+        boolean completeMatch,
+        Map<String, Boolean> cluster,
+        Collection<ResourcePrivileges> index,
+        Map<String, Collection<ResourcePrivileges>> application
+    ) {
         super();
         this.username = username;
         this.completeMatch = completeMatch;
@@ -114,7 +119,7 @@ public class HasPrivilegesResponse extends ActionResponse implements ToXContentO
         final Set<ResourcePrivileges> set = new TreeSet<>(Comparator.comparing(o -> o.getResource()));
         for (int i = 0; i < count; i++) {
             final String index = in.readString();
-            final Map<String, Boolean> privileges = in.readMap(StreamInput::readString, StreamInput::readBoolean);
+            final Map<String, Boolean> privileges = in.readMap(StreamInput::readBoolean);
             set.add(ResourcePrivileges.builder(index).addPrivileges(privileges).build());
         }
         return set;
@@ -139,20 +144,28 @@ public class HasPrivilegesResponse extends ActionResponse implements ToXContentO
 
     @Override
     public String toString() {
-        return getClass().getSimpleName() + "{"
-            + "username=" + username + ","
-            + "completeMatch=" + completeMatch + ","
-            + "cluster=" + cluster + ","
-            + "index=" + index + ","
-            + "application=" + application
+        return getClass().getSimpleName()
+            + "{"
+            + "username="
+            + username
+            + ","
+            + "completeMatch="
+            + completeMatch
+            + ","
+            + "cluster="
+            + cluster
+            + ","
+            + "index="
+            + index
+            + ","
+            + "application="
+            + application
             + "}";
     }
 
     @Override
     public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
-        builder.startObject()
-            .field("username", username)
-            .field("has_all_requested", completeMatch);
+        builder.startObject().field("username", username).field("has_all_requested", completeMatch);
 
         builder.field("cluster");
         builder.map(cluster);
@@ -169,8 +182,7 @@ public class HasPrivilegesResponse extends ActionResponse implements ToXContentO
         return builder;
     }
 
-    private void appendResources(XContentBuilder builder, String field, Set<ResourcePrivileges> privileges)
-        throws IOException {
+    private static void appendResources(XContentBuilder builder, String field, Set<ResourcePrivileges> privileges) throws IOException {
         builder.startObject(field);
         for (ResourcePrivileges privilege : privileges) {
             builder.field(privilege.getResource());

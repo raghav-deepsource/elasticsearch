@@ -25,20 +25,21 @@ import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.TermQuery;
 import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.store.Directory;
-import org.elasticsearch.Version;
+import org.elasticsearch.TransportVersion;
 import org.elasticsearch.action.termvectors.TermVectorsRequest.Flag;
 import org.elasticsearch.common.bytes.BytesArray;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.io.stream.InputStreamStreamInput;
 import org.elasticsearch.common.io.stream.OutputStreamStreamOutput;
-import org.elasticsearch.common.xcontent.XContentParser;
-import org.elasticsearch.common.xcontent.XContentType;
-import org.elasticsearch.common.xcontent.json.JsonXContent;
+import org.elasticsearch.core.RestApiVersion;
 import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.rest.action.document.RestTermVectorsAction;
 import org.elasticsearch.tasks.TaskId;
 import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.test.StreamsUtils;
+import org.elasticsearch.xcontent.XContentParser;
+import org.elasticsearch.xcontent.XContentType;
+import org.elasticsearch.xcontent.json.JsonXContent;
 import org.hamcrest.Matchers;
 
 import java.io.ByteArrayInputStream;
@@ -104,11 +105,11 @@ public class TermVectorsUnitTests extends ESTestCase {
         writer.commit();
         writer.close();
         DirectoryReader dr = DirectoryReader.open(dir);
-        IndexSearcher s = new IndexSearcher(dr);
+        IndexSearcher s = newSearcher(dr);
         TopDocs search = s.search(new TermQuery(new Term("id", "abc")), 1);
         ScoreDoc[] scoreDocs = search.scoreDocs;
         int doc = scoreDocs[0].doc;
-        Fields fields = dr.getTermVectors(doc);
+        Fields fields = s.getIndexReader().termVectors().get(doc);
         EnumSet<Flag> flags = EnumSet.of(Flag.Positions, Flag.Offsets);
         outResponse.setFields(fields, null, flags, fields);
         outResponse.setExists(true);
@@ -139,11 +140,11 @@ public class TermVectorsUnitTests extends ESTestCase {
         writer.commit();
         writer.close();
         DirectoryReader dr = DirectoryReader.open(dir);
-        IndexSearcher s = new IndexSearcher(dr);
+        IndexSearcher s = newSearcher(dr);
         TopDocs search = s.search(new TermQuery(new Term("id", "abc")), 1);
         ScoreDoc[] scoreDocs = search.scoreDocs;
         int doc = scoreDocs[0].doc;
-        Fields termVectors = dr.getTermVectors(doc);
+        Fields termVectors = s.getIndexReader().termVectors().get(doc);
         EnumSet<Flag> flags = EnumSet.of(Flag.Positions, Flag.Offsets);
         outResponse.setFields(termVectors, null, flags, termVectors);
         dr.close();
@@ -160,12 +161,12 @@ public class TermVectorsUnitTests extends ESTestCase {
     }
 
     public void testRestRequestParsing() throws Exception {
-        BytesReference inputBytes = new BytesArray(
-                " {\"fields\" : [\"a\",  \"b\",\"c\"], \"offsets\":false, \"positions\":false, \"payloads\":true}");
+        BytesReference inputBytes = new BytesArray("""
+            {"fields" : ["a",  "b","c"], "offsets":false, "positions":false, "payloads":true}""");
 
         TermVectorsRequest tvr = new TermVectorsRequest(null, null);
         XContentParser parser = createParser(JsonXContent.jsonXContent, inputBytes);
-        TermVectorsRequest.parseRequest(tvr, parser);
+        TermVectorsRequest.parseRequest(tvr, parser, RestApiVersion.current());
 
         Set<String> fields = tvr.selectedFields();
         assertThat(fields.contains("a"), equalTo(true));
@@ -186,7 +187,7 @@ public class TermVectorsUnitTests extends ESTestCase {
         inputBytes = new BytesArray(" {\"offsets\":false, \"positions\":false, \"payloads\":true}");
         tvr = new TermVectorsRequest(null, null);
         parser = createParser(JsonXContent.jsonXContent, inputBytes);
-        TermVectorsRequest.parseRequest(tvr, parser);
+        TermVectorsRequest.parseRequest(tvr, parser, RestApiVersion.current());
         additionalFields = "";
         RestTermVectorsAction.addFieldStringsFromParameter(tvr, additionalFields);
         assertThat(tvr.selectedFields(), equalTo(null));
@@ -197,13 +198,13 @@ public class TermVectorsUnitTests extends ESTestCase {
     }
 
     public void testRequestParsingThrowsException() throws Exception {
-        BytesReference inputBytes = new BytesArray(
-                " {\"fields\" : \"a,  b,c   \", \"offsets\":false, \"positions\":false, \"payloads\":true, \"meaningless_term\":2}");
+        BytesReference inputBytes = new BytesArray("""
+            {"fields" : "a,  b,c   ", "offsets":false, "positions":false, "payloads":true, "meaningless_term":2}""");
         TermVectorsRequest tvr = new TermVectorsRequest(null, null);
         boolean threwException = false;
         try {
             XContentParser parser = createParser(JsonXContent.jsonXContent, inputBytes);
-            TermVectorsRequest.parseRequest(tvr, parser);
+            TermVectorsRequest.parseRequest(tvr, parser, RestApiVersion.current());
         } catch (Exception e) {
             threwException = true;
         }
@@ -260,7 +261,7 @@ public class TermVectorsUnitTests extends ESTestCase {
             // write using older version which contains types
             ByteArrayOutputStream outBuffer = new ByteArrayOutputStream();
             OutputStreamStreamOutput out = new OutputStreamStreamOutput(outBuffer);
-            out.setVersion(Version.V_7_2_0);
+            out.setTransportVersion(TransportVersion.V_7_2_0);
             request.writeTo(out);
 
             // First check the type on the stream was written as "_doc" by manually parsing the stream until the type
@@ -276,7 +277,7 @@ public class TermVectorsUnitTests extends ESTestCase {
             // now read the stream as normal to check it is parsed correct if received from an older node
             esInBuffer = new ByteArrayInputStream(outBuffer.toByteArray());
             esBuffer = new InputStreamStreamInput(esInBuffer);
-            esBuffer.setVersion(Version.V_7_2_0);
+            esBuffer.setTransportVersion(TransportVersion.V_7_2_0);
             TermVectorsRequest req2 = new TermVectorsRequest(esBuffer);
 
             assertThat(request.offsets(), equalTo(req2.offsets()));
@@ -321,7 +322,7 @@ public class TermVectorsUnitTests extends ESTestCase {
             assertThat(singleRequest.offsets(), equalTo(false));
             assertThat(singleRequest.termStatistics(), equalTo(true));
             assertThat(singleRequest.fieldStatistics(), equalTo(false));
-            assertThat(singleRequest.id(),Matchers.anyOf(Matchers.equalTo("1"), Matchers.equalTo("2")));
+            assertThat(singleRequest.id(), Matchers.anyOf(Matchers.equalTo("1"), Matchers.equalTo("2")));
             assertThat(singleRequest.selectedFields(), equalTo(fields));
         }
     }

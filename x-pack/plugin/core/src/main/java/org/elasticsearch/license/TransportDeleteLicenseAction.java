@@ -17,6 +17,7 @@ import org.elasticsearch.cluster.block.ClusterBlockLevel;
 import org.elasticsearch.cluster.metadata.IndexNameExpressionResolver;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.inject.Inject;
+import org.elasticsearch.license.internal.MutableLicenseService;
 import org.elasticsearch.protocol.xpack.license.DeleteLicenseRequest;
 import org.elasticsearch.tasks.Task;
 import org.elasticsearch.threadpool.ThreadPool;
@@ -24,14 +25,27 @@ import org.elasticsearch.transport.TransportService;
 
 public class TransportDeleteLicenseAction extends AcknowledgedTransportMasterNodeAction<DeleteLicenseRequest> {
 
-    private final LicenseService licenseService;
+    private final MutableLicenseService licenseService;
 
     @Inject
-    public TransportDeleteLicenseAction(TransportService transportService, ClusterService clusterService,
-                                        LicenseService licenseService, ThreadPool threadPool, ActionFilters actionFilters,
-                                        IndexNameExpressionResolver indexNameExpressionResolver) {
-        super(DeleteLicenseAction.NAME, transportService, clusterService, threadPool, actionFilters,
-                DeleteLicenseRequest::new, indexNameExpressionResolver, ThreadPool.Names.MANAGEMENT);
+    public TransportDeleteLicenseAction(
+        TransportService transportService,
+        ClusterService clusterService,
+        MutableLicenseService licenseService,
+        ThreadPool threadPool,
+        ActionFilters actionFilters,
+        IndexNameExpressionResolver indexNameExpressionResolver
+    ) {
+        super(
+            DeleteLicenseAction.NAME,
+            transportService,
+            clusterService,
+            threadPool,
+            actionFilters,
+            DeleteLicenseRequest::new,
+            indexNameExpressionResolver,
+            ThreadPool.Names.MANAGEMENT
+        );
         this.licenseService = licenseService;
     }
 
@@ -41,9 +55,12 @@ public class TransportDeleteLicenseAction extends AcknowledgedTransportMasterNod
     }
 
     @Override
-    protected void masterOperation(Task task, final DeleteLicenseRequest request, ClusterState state,
-                                   final ActionListener<AcknowledgedResponse> listener) throws ElasticsearchException {
-        licenseService.removeLicense(request, listener.delegateFailure((l, postStartBasicResponse) ->
-                l.onResponse(AcknowledgedResponse.of(postStartBasicResponse.isAcknowledged()))));
+    protected void masterOperation(
+        Task task,
+        final DeleteLicenseRequest request,
+        ClusterState state,
+        final ActionListener<AcknowledgedResponse> listener
+    ) throws ElasticsearchException {
+        licenseService.removeLicense(listener.map(r -> AcknowledgedResponse.of(r.isAcknowledged())));
     }
 }

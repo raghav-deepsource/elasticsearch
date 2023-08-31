@@ -28,12 +28,17 @@ public class PendingTasksBlocksIT extends ESIntegTestCase {
         ensureGreen("test");
 
         // This test checks that the Pending Cluster Tasks operation is never blocked, even if an index is read only or whatever.
-        for (String blockSetting : Arrays.asList(SETTING_BLOCKS_READ, SETTING_BLOCKS_WRITE, SETTING_READ_ONLY, SETTING_BLOCKS_METADATA,
-            SETTING_READ_ONLY_ALLOW_DELETE)) {
+        for (String blockSetting : Arrays.asList(
+            SETTING_BLOCKS_READ,
+            SETTING_BLOCKS_WRITE,
+            SETTING_READ_ONLY,
+            SETTING_BLOCKS_METADATA,
+            SETTING_READ_ONLY_ALLOW_DELETE
+        )) {
             try {
                 enableIndexBlock("test", blockSetting);
-                PendingClusterTasksResponse response = client().admin().cluster().preparePendingClusterTasks().get();
-                assertNotNull(response.getPendingTasks());
+                PendingClusterTasksResponse response = clusterAdmin().preparePendingClusterTasks().get();
+                assertNotNull(response.pendingTasks());
             } finally {
                 disableIndexBlock("test", blockSetting);
             }
@@ -48,8 +53,8 @@ public class PendingTasksBlocksIT extends ESIntegTestCase {
 
         try {
             setClusterReadOnly(true);
-            PendingClusterTasksResponse response = client().admin().cluster().preparePendingClusterTasks().get();
-            assertNotNull(response.getPendingTasks());
+            PendingClusterTasksResponse response = clusterAdmin().preparePendingClusterTasks().get();
+            assertNotNull(response.pendingTasks());
         } finally {
             setClusterReadOnly(false);
         }
@@ -62,13 +67,11 @@ public class PendingTasksBlocksIT extends ESIntegTestCase {
         }
 
         // restart the cluster but prevent it from performing state recovery
-        final int nodeCount = client().admin().cluster().prepareNodesInfo("data:true").get().getNodes().size();
+        final int nodeCount = clusterAdmin().prepareNodesInfo("data:true").get().getNodes().size();
         internalCluster().fullRestart(new InternalTestCluster.RestartCallback() {
             @Override
             public Settings onNodeStopped(String nodeName) {
-                return Settings.builder()
-                    .put(GatewayService.RECOVER_AFTER_DATA_NODES_SETTING.getKey(), nodeCount + 1)
-                    .build();
+                return Settings.builder().put(GatewayService.RECOVER_AFTER_DATA_NODES_SETTING.getKey(), nodeCount + 1).build();
             }
 
             @Override
@@ -77,7 +80,7 @@ public class PendingTasksBlocksIT extends ESIntegTestCase {
             }
         });
 
-        assertNotNull(client().admin().cluster().preparePendingClusterTasks().get().getPendingTasks());
+        assertNotNull(clusterAdmin().preparePendingClusterTasks().get().pendingTasks());
 
         // starting one more node allows the cluster to recover
         internalCluster().startNode();

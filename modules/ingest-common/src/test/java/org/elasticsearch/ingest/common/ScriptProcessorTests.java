@@ -20,41 +20,36 @@ import org.elasticsearch.script.ScriptType;
 import org.elasticsearch.test.ESTestCase;
 import org.junit.Before;
 
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
+import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasKey;
-import static org.hamcrest.core.Is.is;
+import static org.hamcrest.Matchers.is;
 
 public class ScriptProcessorTests extends ESTestCase {
 
     private ScriptService scriptService;
     private Script script;
-    private IngestScript ingestScript;
+    private IngestScript.Factory ingestScriptFactory;
 
     @Before
     public void setupScripting() {
         String scriptName = "script";
-        scriptService = new ScriptService(Settings.builder().build(),
-            Collections.singletonMap(
-                Script.DEFAULT_SCRIPT_LANG, new MockScriptEngine(
-                    Script.DEFAULT_SCRIPT_LANG,
-                    Collections.singletonMap(
-                        scriptName, ctx -> {
-                            Integer bytesIn = (Integer) ctx.get("bytes_in");
-                            Integer bytesOut = (Integer) ctx.get("bytes_out");
-                            ctx.put("bytes_total", bytesIn + bytesOut);
-                            return null;
-                        }
-                    ),
-                    Collections.emptyMap()
-                )
-            ),
-            new HashMap<>(ScriptModule.CORE_CONTEXTS)
+        scriptService = new ScriptService(
+            Settings.builder().build(),
+            Map.of(Script.DEFAULT_SCRIPT_LANG, new MockScriptEngine(Script.DEFAULT_SCRIPT_LANG, Map.of(scriptName, ctx -> {
+                Integer bytesIn = (Integer) ctx.get("bytes_in");
+                Integer bytesOut = (Integer) ctx.get("bytes_out");
+                ctx.put("bytes_total", bytesIn + bytesOut);
+                ctx.put("_dynamic_templates", Map.of("foo", "bar"));
+                return null;
+            }), Map.of())),
+            new HashMap<>(ScriptModule.CORE_CONTEXTS),
+            () -> 1L
         );
-        script = new Script(ScriptType.INLINE, Script.DEFAULT_SCRIPT_LANG, scriptName, Collections.emptyMap());
-        ingestScript = scriptService.compile(script, IngestScript.CONTEXT).newInstance(script.getParams());
+        script = new Script(ScriptType.INLINE, Script.DEFAULT_SCRIPT_LANG, scriptName, Map.of());
+        ingestScriptFactory = scriptService.compile(script, IngestScript.CONTEXT);
     }
 
     public void testScriptingWithoutPrecompiledScriptFactory() throws Exception {
@@ -65,7 +60,7 @@ public class ScriptProcessorTests extends ESTestCase {
     }
 
     public void testScriptingWithPrecompiledIngestScript() {
-        ScriptProcessor processor = new ScriptProcessor(randomAlphaOfLength(10), null, script, ingestScript, scriptService);
+        ScriptProcessor processor = new ScriptProcessor(randomAlphaOfLength(10), null, script, ingestScriptFactory, scriptService);
         IngestDocument ingestDocument = randomDocument();
         processor.execute(ingestDocument);
         assertIngestDocument(ingestDocument);
@@ -84,5 +79,6 @@ public class ScriptProcessorTests extends ESTestCase {
         assertThat(ingestDocument.getSourceAndMetadata(), hasKey("bytes_total"));
         int bytesTotal = ingestDocument.getFieldValue("bytes_in", Integer.class) + ingestDocument.getFieldValue("bytes_out", Integer.class);
         assertThat(ingestDocument.getSourceAndMetadata().get("bytes_total"), is(bytesTotal));
+        assertThat(ingestDocument.getSourceAndMetadata().get("_dynamic_templates"), equalTo(Map.of("foo", "bar")));
     }
 }

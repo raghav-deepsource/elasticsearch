@@ -8,7 +8,7 @@ package org.elasticsearch.xpack.eql;
 
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.support.ActionFilters;
-import org.elasticsearch.client.Client;
+import org.elasticsearch.client.internal.Client;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.metadata.IndexNameExpressionResolver;
 import org.elasticsearch.cluster.service.ClusterService;
@@ -35,22 +35,30 @@ public class EqlUsageTransportAction extends XPackUsageFeatureTransportAction {
     private final Client client;
 
     @Inject
-    public EqlUsageTransportAction(TransportService transportService, ClusterService clusterService, ThreadPool threadPool,
-                                   ActionFilters actionFilters, IndexNameExpressionResolver indexNameExpressionResolver,
-                                   Client client) {
-        super(XPackUsageFeatureAction.EQL.name(), transportService, clusterService, threadPool, actionFilters,
-            indexNameExpressionResolver);
+    public EqlUsageTransportAction(
+        TransportService transportService,
+        ClusterService clusterService,
+        ThreadPool threadPool,
+        ActionFilters actionFilters,
+        IndexNameExpressionResolver indexNameExpressionResolver,
+        Client client
+    ) {
+        super(XPackUsageFeatureAction.EQL.name(), transportService, clusterService, threadPool, actionFilters, indexNameExpressionResolver);
         this.client = client;
     }
 
     @Override
-    protected void masterOperation(Task task, XPackUsageRequest request, ClusterState state,
-                                   ActionListener<XPackUsageFeatureResponse> listener) {
+    protected void masterOperation(
+        Task task,
+        XPackUsageRequest request,
+        ClusterState state,
+        ActionListener<XPackUsageFeatureResponse> listener
+    ) {
 
         EqlStatsRequest eqlRequest = new EqlStatsRequest();
         eqlRequest.includeStats(true);
         eqlRequest.setParentTask(clusterService.localNode().getId(), task.getId());
-        client.execute(EqlStatsAction.INSTANCE, eqlRequest, ActionListener.wrap(r -> {
+        client.execute(EqlStatsAction.INSTANCE, eqlRequest, listener.delegateFailureAndWrap((delegate, r) -> {
             List<Counters> countersPerNode = r.getNodes()
                 .stream()
                 .map(EqlStatsResponse.NodeStatsResponse::getStats)
@@ -58,7 +66,7 @@ public class EqlUsageTransportAction extends XPackUsageFeatureTransportAction {
                 .collect(Collectors.toList());
             Counters mergedCounters = Counters.merge(countersPerNode);
             EqlFeatureSetUsage usage = new EqlFeatureSetUsage(mergedCounters.toNestedMap());
-            listener.onResponse(new XPackUsageFeatureResponse(usage));
-        }, listener::onFailure));
+            delegate.onResponse(new XPackUsageFeatureResponse(usage));
+        }));
     }
 }

@@ -7,7 +7,7 @@
 package org.elasticsearch.xpack.core.ml.action;
 
 import org.elasticsearch.common.io.stream.Writeable;
-import org.elasticsearch.common.unit.TimeValue;
+import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.test.AbstractWireSerializingTestCase;
 import org.elasticsearch.xpack.core.ml.action.DeleteDataFrameAnalyticsAction.Request;
 
@@ -24,6 +24,11 @@ public class DeleteDataFrameAnalyticsActionRequestTests extends AbstractWireSeri
             request.timeout(TimeValue.parseTimeValue(randomTimeValue(), "test"));
         }
         return request;
+    }
+
+    @Override
+    protected Request mutateInstance(Request instance) {
+        return null;// TODO implement https://github.com/elastic/elasticsearch/issues/25929
     }
 
     @Override

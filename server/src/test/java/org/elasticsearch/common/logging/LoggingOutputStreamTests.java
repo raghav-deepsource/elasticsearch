@@ -33,7 +33,7 @@ public class LoggingOutputStreamTests extends ESTestCase {
         }
 
         @Override
-        void log(String msg) {
+        protected void log(String msg) {
             lines.add(msg);
         }
     }
@@ -109,9 +109,7 @@ public class LoggingOutputStreamTests extends ESTestCase {
 
     public void testThreadIsolation() throws Exception {
         printStream.print("from thread 1");
-        Thread thread2 = new Thread(() -> {
-            printStream.println("from thread 2");
-        });
+        Thread thread2 = new Thread(() -> { printStream.println("from thread 2"); });
         thread2.start();
         thread2.join();
         printStream.flush();

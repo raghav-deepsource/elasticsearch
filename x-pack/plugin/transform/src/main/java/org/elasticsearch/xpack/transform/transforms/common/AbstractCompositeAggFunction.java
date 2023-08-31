@@ -15,8 +15,10 @@ import org.elasticsearch.action.search.SearchAction;
 import org.elasticsearch.action.search.SearchRequest;
 import org.elasticsearch.action.search.SearchResponse;
 import org.elasticsearch.action.support.IndicesOptions;
-import org.elasticsearch.client.Client;
-import org.elasticsearch.common.collect.Tuple;
+import org.elasticsearch.client.internal.Client;
+import org.elasticsearch.common.ValidationException;
+import org.elasticsearch.core.TimeValue;
+import org.elasticsearch.core.Tuple;
 import org.elasticsearch.rest.RestStatus;
 import org.elasticsearch.search.aggregations.Aggregations;
 import org.elasticsearch.search.aggregations.bucket.composite.CompositeAggregation;
@@ -31,10 +33,13 @@ import org.elasticsearch.xpack.core.transform.transforms.TransformProgress;
 import org.elasticsearch.xpack.transform.transforms.Function;
 import org.elasticsearch.xpack.transform.transforms.pivot.AggregationResultUtils;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+
+import static org.elasticsearch.core.Strings.format;
 
 /**
  * Basic abstract class for implementing a transform function that utilizes composite aggregations
@@ -60,6 +65,7 @@ public abstract class AbstractCompositeAggFunction implements Function {
     @Override
     public void preview(
         Client client,
+        TimeValue timeout,
         Map<String, String> headers,
         SourceConfig sourceConfig,
         Map<String, String> fieldTypeMap,
@@ -72,21 +78,27 @@ public abstract class AbstractCompositeAggFunction implements Function {
             ClientHelper.TRANSFORM_ORIGIN,
             client,
             SearchAction.INSTANCE,
-            buildSearchRequest(sourceConfig, null, numberOfBuckets),
+            buildSearchRequest(sourceConfig, timeout, numberOfBuckets),
             ActionListener.wrap(r -> {
                 try {
                     final Aggregations aggregations = r.getAggregations();
                     if (aggregations == null) {
                         listener.onFailure(
-                            new ElasticsearchStatusException("Source indices have been deleted or closed.", RestStatus.BAD_REQUEST));
+                            new ElasticsearchStatusException("Source indices have been deleted or closed.", RestStatus.BAD_REQUEST)
+                        );
                         return;
                     }
                     final CompositeAggregation agg = aggregations.get(COMPOSITE_AGGREGATION_NAME);
-                    TransformIndexerStats stats = new TransformIndexerStats();
+                    if (agg == null || agg.getBuckets().isEmpty()) {
+                        listener.onResponse(Collections.emptyList());
+                        return;
+                    }
 
-                    List<Map<String, Object>> docs = extractResults(agg, fieldTypeMap, stats)
-                        .map(this::documentTransformationFunction)
-                        .collect(Collectors.toList());
+                    TransformIndexerStats stats = new TransformIndexerStats();
+                    TransformProgress progress = new TransformProgress();
+                    List<Map<String, Object>> docs = extractResults(agg, fieldTypeMap, stats, progress).map(
+                        this::documentTransformationFunction
+                    ).collect(Collectors.toList());
 
                     listener.onResponse(docs);
                 } catch (AggregationResultUtils.AggregationExtractionException extractionException) {
@@ -97,30 +109,44 @@ public abstract class AbstractCompositeAggFunction implements Function {
     }
 
     @Override
-    public void validateQuery(Client client, SourceConfig sourceConfig, ActionListener<Boolean> listener) {
-        SearchRequest searchRequest = buildSearchRequest(sourceConfig, null, TEST_QUERY_PAGE_SIZE);
-        client.execute(SearchAction.INSTANCE, searchRequest, ActionListener.wrap(response -> {
-            if (response == null) {
+    public void validateQuery(
+        Client client,
+        Map<String, String> headers,
+        SourceConfig sourceConfig,
+        TimeValue timeout,
+        ActionListener<Boolean> listener
+    ) {
+        SearchRequest searchRequest = buildSearchRequest(sourceConfig, timeout, TEST_QUERY_PAGE_SIZE);
+        ClientHelper.executeWithHeadersAsync(
+            headers,
+            ClientHelper.TRANSFORM_ORIGIN,
+            client,
+            SearchAction.INSTANCE,
+            searchRequest,
+            ActionListener.wrap(response -> {
+                if (response == null) {
+                    listener.onFailure(new ValidationException().addValidationError("Unexpected null response from test query"));
+                    return;
+                }
+                if (response.status() != RestStatus.OK) {
+                    listener.onFailure(
+                        new ValidationException().addValidationError(
+                            format("Unexpected status from response of test query: %s", response.status())
+                        )
+                    );
+                    return;
+                }
+                listener.onResponse(true);
+            }, e -> {
+                Throwable unwrapped = ExceptionsHelper.unwrapCause(e);
+                RestStatus status = unwrapped instanceof ElasticsearchException
+                    ? ((ElasticsearchException) unwrapped).status()
+                    : RestStatus.SERVICE_UNAVAILABLE;
                 listener.onFailure(
-                    new ElasticsearchStatusException("Unexpected null response from test query", RestStatus.SERVICE_UNAVAILABLE)
+                    new ValidationException(unwrapped).addValidationError(format("Failed to test query, received status: %s", status))
                 );
-                return;
-            }
-            if (response.status() != RestStatus.OK) {
-                listener.onFailure(
-                    new ElasticsearchStatusException(
-                        "Unexpected status from response of test query: {}", response.status(), response.status())
-                );
-                return;
-            }
-            listener.onResponse(true);
-        }, e -> {
-            Throwable unwrapped = ExceptionsHelper.unwrapCause(e);
-            RestStatus status = unwrapped instanceof ElasticsearchException
-                ? ((ElasticsearchException) unwrapped).status()
-                : RestStatus.SERVICE_UNAVAILABLE;
-            listener.onFailure(new ElasticsearchStatusException("Failed to test query", status, unwrapped));
-        }));
+            })
+        );
     }
 
     @Override
@@ -129,7 +155,8 @@ public abstract class AbstractCompositeAggFunction implements Function {
         String destinationIndex,
         String destinationPipeline,
         Map<String, String> fieldTypeMap,
-        TransformIndexerStats stats
+        TransformIndexerStats stats,
+        TransformProgress progress
     ) {
         Aggregations aggregations = searchResponse.getAggregations();
 
@@ -140,20 +167,19 @@ public abstract class AbstractCompositeAggFunction implements Function {
         }
 
         CompositeAggregation compositeAgg = aggregations.get(COMPOSITE_AGGREGATION_NAME);
-        if (compositeAgg == null || compositeAgg.getBuckets().isEmpty()) {
+        if (compositeAgg == null || compositeAgg.afterKey() == null) {
             return null;
         }
 
-        Stream<IndexRequest> indexRequestStream = extractResults(compositeAgg, fieldTypeMap, stats)
-            .map(doc -> {
-                String docId = (String)doc.remove(TransformField.DOCUMENT_ID_FIELD);
-                return DocumentConversionUtils.convertDocumentToIndexRequest(
-                    docId,
-                    documentTransformationFunction(doc),
-                    destinationIndex,
-                    destinationPipeline
-                );
-            });
+        Stream<IndexRequest> indexRequestStream = extractResults(compositeAgg, fieldTypeMap, stats, progress).map(doc -> {
+            String docId = (String) doc.remove(TransformField.DOCUMENT_ID_FIELD);
+            return DocumentConversionUtils.convertDocumentToIndexRequest(
+                docId,
+                documentTransformationFunction(doc),
+                destinationIndex,
+                destinationPipeline
+            );
+        });
 
         return Tuple.tuple(indexRequestStream, compositeAgg.afterKey());
     }
@@ -163,17 +189,16 @@ public abstract class AbstractCompositeAggFunction implements Function {
     protected abstract Stream<Map<String, Object>> extractResults(
         CompositeAggregation agg,
         Map<String, String> fieldTypeMap,
-        TransformIndexerStats transformIndexerStats
+        TransformIndexerStats transformIndexerStats,
+        TransformProgress progress
     );
 
-    private SearchRequest buildSearchRequest(SourceConfig sourceConfig, Map<String, Object> position, int pageSize) {
-        SearchSourceBuilder sourceBuilder = new SearchSourceBuilder()
-            .query(sourceConfig.getQueryConfig().getQuery())
-            .runtimeMappings(sourceConfig.getRuntimeMappings());
+    private SearchRequest buildSearchRequest(SourceConfig sourceConfig, TimeValue timeout, int pageSize) {
+        SearchSourceBuilder sourceBuilder = new SearchSourceBuilder().query(sourceConfig.getQueryConfig().getQuery())
+            .runtimeMappings(sourceConfig.getRuntimeMappings())
+            .timeout(timeout);
         buildSearchQuery(sourceBuilder, null, pageSize);
-        return new SearchRequest(sourceConfig.getIndex())
-            .source(sourceBuilder)
-            .indicesOptions(IndicesOptions.LENIENT_EXPAND_OPEN);
+        return new SearchRequest(sourceConfig.getIndex()).source(sourceBuilder).indicesOptions(IndicesOptions.LENIENT_EXPAND_OPEN);
     }
 
     @Override

@@ -7,11 +7,11 @@
 
 package org.elasticsearch.xpack.core.slm;
 
-import org.elasticsearch.Version;
-import org.elasticsearch.common.Nullable;
+import org.elasticsearch.TransportVersion;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
-import org.elasticsearch.common.xcontent.XContentBuilder;
+import org.elasticsearch.core.Nullable;
+import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xpack.core.XPackFeatureSet;
 import org.elasticsearch.xpack.core.XPackField;
 
@@ -39,8 +39,8 @@ public class SLMFeatureSetUsage extends XPackFeatureSet.Usage {
     }
 
     @Override
-    public Version getMinimalSupportedVersion() {
-        return Version.V_7_5_0;
+    public TransportVersion getMinimalSupportedVersion() {
+        return TransportVersion.V_7_5_0;
     }
 
     public SnapshotLifecycleStats getStats() {
@@ -70,9 +70,9 @@ public class SLMFeatureSetUsage extends XPackFeatureSet.Usage {
             return false;
         }
         SLMFeatureSetUsage other = (SLMFeatureSetUsage) obj;
-        return Objects.equals(available, other.available) &&
-            Objects.equals(enabled, other.enabled) &&
-            Objects.equals(slmStats, other.slmStats);
+        return Objects.equals(available, other.available)
+            && Objects.equals(enabled, other.enabled)
+            && Objects.equals(slmStats, other.slmStats);
     }
 
 }

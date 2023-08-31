@@ -22,7 +22,8 @@ import java.util.Set;
 
 public class AuditUtil {
 
-    private static final String AUDIT_REQUEST_ID = "_xpack_audit_request_id";
+    // We need to expose this to allow-list as a header passed for cross cluster requests; see `CrossClusterAccessServerTransportFilter`
+    public static final String AUDIT_REQUEST_ID = "_xpack_audit_request_id";
 
     public static String restRequestContent(RestRequest request) {
         if (request.hasContent()) {
@@ -62,8 +63,9 @@ public class AuditUtil {
         if (checkExisting) {
             final String existing = extractRequestId(threadContext);
             if (existing != null) {
-                throw new IllegalStateException("Cannot generate a new audit request id - existing id ["
-                    + existing + "] already registered");
+                throw new IllegalStateException(
+                    "Cannot generate a new audit request id - existing id [" + existing + "] already registered"
+                );
             }
         }
         final String requestId = UUIDs.randomBase64UUID(Randomness.get());

@@ -9,8 +9,9 @@ package org.elasticsearch.xpack.logstash;
 import org.elasticsearch.action.support.ActionFilters;
 import org.elasticsearch.action.support.PlainActionFuture;
 import org.elasticsearch.common.io.stream.BytesStreamOutput;
-import org.elasticsearch.license.XPackLicenseState;
+import org.elasticsearch.license.MockLicenseState;
 import org.elasticsearch.test.ESTestCase;
+import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.TransportService;
 import org.elasticsearch.xpack.core.XPackFeatureSet;
 import org.elasticsearch.xpack.core.action.XPackUsageFeatureResponse;
@@ -22,12 +23,14 @@ import static org.mockito.Mockito.when;
 
 public class LogstashInfoTransportActionTests extends ESTestCase {
 
+    private final TransportService transportService = mock(TransportService.class);
+
+    {
+        when(transportService.getThreadPool()).thenReturn(mock(ThreadPool.class));
+    }
+
     public void testEnabledDefault() throws Exception {
-        LogstashInfoTransportAction featureSet = new LogstashInfoTransportAction(
-            mock(TransportService.class),
-            mock(ActionFilters.class),
-            null
-        );
+        LogstashInfoTransportAction featureSet = new LogstashInfoTransportAction(transportService, mock(ActionFilters.class), null);
         assertThat(featureSet.enabled(), is(true));
 
         LogstashUsageTransportAction usageAction = newUsageAction(false);
@@ -42,14 +45,10 @@ public class LogstashInfoTransportActionTests extends ESTestCase {
     }
 
     public void testAvailable() throws Exception {
-        final XPackLicenseState licenseState = mock(XPackLicenseState.class);
-        LogstashInfoTransportAction featureSet = new LogstashInfoTransportAction(
-            mock(TransportService.class),
-            mock(ActionFilters.class),
-            licenseState
-        );
+        final MockLicenseState licenseState = mock(MockLicenseState.class);
+        LogstashInfoTransportAction featureSet = new LogstashInfoTransportAction(transportService, mock(ActionFilters.class), licenseState);
         boolean available = randomBoolean();
-        when(licenseState.isAllowed(XPackLicenseState.Feature.LOGSTASH)).thenReturn(available);
+        when(licenseState.isAllowed(Logstash.LOGSTASH_FEATURE)).thenReturn(available);
         assertThat(featureSet.available(), is(available));
 
         var usageAction = newUsageAction(available);
@@ -65,8 +64,15 @@ public class LogstashInfoTransportActionTests extends ESTestCase {
     }
 
     private LogstashUsageTransportAction newUsageAction(boolean available) {
-        XPackLicenseState licenseState = mock(XPackLicenseState.class);
-        when(licenseState.isAllowed(XPackLicenseState.Feature.LOGSTASH)).thenReturn(available);
-        return new LogstashUsageTransportAction(mock(TransportService.class), null, null, mock(ActionFilters.class), null, licenseState);
+        final MockLicenseState licenseState = mock(MockLicenseState.class);
+        when(licenseState.isAllowed(Logstash.LOGSTASH_FEATURE)).thenReturn(available);
+        return new LogstashUsageTransportAction(
+            transportService,
+            null,
+            transportService.getThreadPool(),
+            mock(ActionFilters.class),
+            null,
+            licenseState
+        );
     }
 }

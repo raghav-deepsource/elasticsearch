@@ -21,6 +21,7 @@ import org.elasticsearch.common.util.CollectionUtils;
 import org.elasticsearch.plugins.ActionPlugin;
 import org.elasticsearch.plugins.Plugin;
 import org.elasticsearch.snapshots.SnapshotRestoreException;
+import org.elasticsearch.test.ESIntegTestCase;
 import org.elasticsearch.xpack.core.searchablesnapshots.MountSearchableSnapshotAction;
 import org.elasticsearch.xpack.core.searchablesnapshots.MountSearchableSnapshotRequest;
 
@@ -33,7 +34,8 @@ import static org.elasticsearch.index.IndexSettings.INDEX_SOFT_DELETES_SETTING;
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertAcked;
 import static org.hamcrest.Matchers.containsString;
 
-public class SearchableSnapshotsUuidValidationIntegTests extends BaseSearchableSnapshotsIntegTestCase {
+@ESIntegTestCase.ClusterScope(scope = ESIntegTestCase.Scope.TEST)
+public class SearchableSnapshotsUuidValidationIntegTests extends BaseFrozenSearchableSnapshotsIntegTestCase {
 
     public static class TestPlugin extends Plugin implements ActionPlugin {
 
@@ -110,7 +112,7 @@ public class SearchableSnapshotsUuidValidationIntegTests extends BaseSearchableS
         final RestoreBlockingActionFilter restoreBlockingActionFilter = getBlockingActionFilter();
         restoreBlockingActionFilter.awaitExecution();
 
-        assertAcked(client().admin().cluster().prepareDeleteSnapshot(fsRepoName, snapshotName).get());
+        assertAcked(clusterAdmin().prepareDeleteSnapshot(fsRepoName, snapshotName).get());
         createFullSnapshot(fsRepoName, snapshotName);
 
         assertFalse(responseFuture.isDone());
@@ -121,7 +123,7 @@ public class SearchableSnapshotsUuidValidationIntegTests extends BaseSearchableS
             containsString("snapshot UUID mismatch")
         );
 
-        assertAcked(client().admin().indices().prepareDelete(indexName));
+        assertAcked(indicesAdmin().prepareDelete(indexName));
     }
 
     private static RestoreBlockingActionFilter getBlockingActionFilter() {

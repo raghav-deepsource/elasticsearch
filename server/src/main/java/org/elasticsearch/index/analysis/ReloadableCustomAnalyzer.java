@@ -14,15 +14,21 @@ import org.apache.lucene.analysis.Tokenizer;
 import org.apache.lucene.util.CloseableThreadLocal;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.util.CollectionUtils;
+import org.elasticsearch.index.IndexService.IndexCreationContext;
 
 import java.io.Reader;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
 public final class ReloadableCustomAnalyzer extends Analyzer implements AnalyzerComponentsProvider {
 
     private volatile AnalyzerComponents components;
 
     private CloseableThreadLocal<AnalyzerComponents> storedComponents = new CloseableThreadLocal<>();
+
+    // external resources that this analyzer is based on
+    private final Set<String> resources;
 
     private final int positionIncrementGap;
 
@@ -57,16 +63,35 @@ public final class ReloadableCustomAnalyzer extends Analyzer implements Analyzer
         super(UPDATE_STRATEGY);
         if (components.analysisMode().equals(AnalysisMode.SEARCH_TIME) == false) {
             throw new IllegalArgumentException(
-                    "ReloadableCustomAnalyzer must only be initialized with analysis components in AnalysisMode.SEARCH_TIME mode");
+                "ReloadableCustomAnalyzer must only be initialized with analysis components in AnalysisMode.SEARCH_TIME mode"
+            );
         }
         this.components = components;
         this.positionIncrementGap = positionIncrementGap;
         this.offsetGap = offsetGap;
+
+        Set<String> resourcesTemp = new HashSet<>();
+        for (TokenFilterFactory tokenFilter : components.getTokenFilters()) {
+            if (tokenFilter.getResourceName() != null) {
+                resourcesTemp.add(tokenFilter.getResourceName());
+            }
+        }
+        resources = resourcesTemp.isEmpty() ? null : Set.copyOf(resourcesTemp);
     }
 
     @Override
     public AnalyzerComponents getComponents() {
         return this.components;
+    }
+
+    public boolean usesResource(String resourceName) {
+        if (resourceName == null) {
+            return true;
+        }
+        if (resources == null) {
+            return false;
+        }
+        return resources.contains(resourceName);
     }
 
     @Override
@@ -105,12 +130,21 @@ public final class ReloadableCustomAnalyzer extends Analyzer implements Analyzer
         return result;
     }
 
-    public synchronized void reload(String name,
-                                    Settings settings,
-                                    final Map<String, TokenizerFactory> tokenizers,
-                                    final Map<String, CharFilterFactory> charFilters,
-                                    final Map<String, TokenFilterFactory> tokenFilters) {
-        AnalyzerComponents components = AnalyzerComponents.createComponents(name, settings, tokenizers, charFilters, tokenFilters);
+    public synchronized void reload(
+        String name,
+        Settings settings,
+        final Map<String, TokenizerFactory> tokenizers,
+        final Map<String, CharFilterFactory> charFilters,
+        final Map<String, TokenFilterFactory> tokenFilters
+    ) {
+        AnalyzerComponents components = AnalyzerComponents.createComponents(
+            IndexCreationContext.RELOAD_ANALYZERS,
+            name,
+            settings,
+            tokenizers,
+            charFilters,
+            tokenFilters
+        );
         this.components = components;
     }
 

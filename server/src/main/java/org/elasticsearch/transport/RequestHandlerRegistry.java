@@ -10,27 +10,40 @@ package org.elasticsearch.transport;
 
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.Writeable;
-import org.elasticsearch.common.lease.Releasable;
-import org.elasticsearch.common.lease.Releasables;
+import org.elasticsearch.core.Releasable;
+import org.elasticsearch.core.Releasables;
 import org.elasticsearch.tasks.CancellableTask;
 import org.elasticsearch.tasks.Task;
 import org.elasticsearch.tasks.TaskManager;
+import org.elasticsearch.tracing.Tracer;
 
 import java.io.IOException;
+import java.util.concurrent.Executor;
 
-public class RequestHandlerRegistry<Request extends TransportRequest> {
+import static org.elasticsearch.core.Releasables.assertOnce;
+
+public class RequestHandlerRegistry<Request extends TransportRequest> implements ResponseStatsConsumer {
 
     private final String action;
     private final TransportRequestHandler<Request> handler;
     private final boolean forceExecution;
     private final boolean canTripCircuitBreaker;
-    private final String executor;
+    private final Executor executor;
     private final TaskManager taskManager;
+    private final Tracer tracer;
     private final Writeable.Reader<Request> requestReader;
+    private final TransportActionStatsTracker statsTracker = new TransportActionStatsTracker();
 
-    public RequestHandlerRegistry(String action, Writeable.Reader<Request> requestReader, TaskManager taskManager,
-                                  TransportRequestHandler<Request> handler, String executor, boolean forceExecution,
-                                  boolean canTripCircuitBreaker) {
+    public RequestHandlerRegistry(
+        String action,
+        Writeable.Reader<Request> requestReader,
+        TaskManager taskManager,
+        TransportRequestHandler<Request> handler,
+        Executor executor,
+        boolean forceExecution,
+        boolean canTripCircuitBreaker,
+        Tracer tracer
+    ) {
         this.action = action;
         this.requestReader = requestReader;
         this.handler = handler;
@@ -38,6 +51,7 @@ public class RequestHandlerRegistry<Request extends TransportRequest> {
         this.canTripCircuitBreaker = canTripCircuitBreaker;
         this.executor = executor;
         this.taskManager = taskManager;
+        this.tracer = tracer;
     }
 
     public String getAction() {
@@ -52,12 +66,12 @@ public class RequestHandlerRegistry<Request extends TransportRequest> {
         final Task task = taskManager.register(channel.getChannelType(), action, request);
         Releasable unregisterTask = () -> taskManager.unregister(task);
         try {
-            if (channel instanceof TcpTransportChannel && task instanceof CancellableTask) {
-                final TcpChannel tcpChannel = ((TcpTransportChannel) channel).getChannel();
-                final Releasable stopTracking = taskManager.startTrackingCancellableChannelTask(tcpChannel, (CancellableTask) task);
+            if (channel instanceof TcpTransportChannel tcpTransportChannel && task instanceof CancellableTask cancellableTask) {
+                final TcpChannel tcpChannel = tcpTransportChannel.getChannel();
+                final Releasable stopTracking = taskManager.startTrackingCancellableChannelTask(tcpChannel, cancellableTask);
                 unregisterTask = Releasables.wrap(unregisterTask, stopTracking);
             }
-            final TaskTransportChannel taskTransportChannel = new TaskTransportChannel(channel, unregisterTask);
+            final TaskTransportChannel taskTransportChannel = new TaskTransportChannel(task.getId(), channel, assertOnce(unregisterTask));
             handler.messageReceived(request, taskTransportChannel, task);
             unregisterTask = null;
         } finally {
@@ -73,7 +87,7 @@ public class RequestHandlerRegistry<Request extends TransportRequest> {
         return canTripCircuitBreaker;
     }
 
-    public String getExecutor() {
+    public Executor getExecutor() {
         return executor;
     }
 
@@ -86,9 +100,32 @@ public class RequestHandlerRegistry<Request extends TransportRequest> {
         return handler.toString();
     }
 
-    public static <R extends TransportRequest> RequestHandlerRegistry<R> replaceHandler(RequestHandlerRegistry<R> registry,
-                                                                                        TransportRequestHandler<R> handler) {
-        return new RequestHandlerRegistry<>(registry.action, registry.requestReader, registry.taskManager, handler,
-            registry.executor, registry.forceExecution, registry.canTripCircuitBreaker);
+    public static <R extends TransportRequest> RequestHandlerRegistry<R> replaceHandler(
+        RequestHandlerRegistry<R> registry,
+        TransportRequestHandler<R> handler
+    ) {
+        return new RequestHandlerRegistry<>(
+            registry.action,
+            registry.requestReader,
+            registry.taskManager,
+            handler,
+            registry.executor,
+            registry.forceExecution,
+            registry.canTripCircuitBreaker,
+            registry.tracer
+        );
+    }
+
+    public void addRequestStats(int messageSize) {
+        statsTracker.addRequestStats(messageSize);
+    }
+
+    @Override
+    public void addResponseStats(int messageSize) {
+        statsTracker.addResponseStats(messageSize);
+    }
+
+    public TransportActionStats getStats() {
+        return statsTracker.getStats();
     }
 }

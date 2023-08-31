@@ -19,7 +19,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.PathMatcher;
 import java.nio.file.StandardOpenOption;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -27,8 +26,12 @@ import java.util.stream.Stream;
 
 public class IngestUserAgentPlugin extends Plugin implements IngestPlugin {
 
-    private final Setting<Long> CACHE_SIZE_SETTING = Setting.longSetting("ingest.user_agent.cache_size", 1000, 0,
-            Setting.Property.NodeScope);
+    private final Setting<Long> CACHE_SIZE_SETTING = Setting.longSetting(
+        "ingest.user_agent.cache_size",
+        1000,
+        0,
+        Setting.Property.NodeScope
+    );
 
     static final String DEFAULT_PARSER_NAME = "_default_";
 
@@ -38,7 +41,8 @@ public class IngestUserAgentPlugin extends Plugin implements IngestPlugin {
 
         if (Files.exists(userAgentConfigDirectory) == false && Files.isDirectory(userAgentConfigDirectory)) {
             throw new IllegalStateException(
-                "the user agent directory [" + userAgentConfigDirectory + "] containing the regex file doesn't exist");
+                "the user agent directory [" + userAgentConfigDirectory + "] containing the regex file doesn't exist"
+            );
         }
 
         long cacheSize = CACHE_SIZE_SETTING.get(parameters.env.settings());
@@ -48,36 +52,48 @@ public class IngestUserAgentPlugin extends Plugin implements IngestPlugin {
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
-        return Collections.singletonMap(UserAgentProcessor.TYPE, new UserAgentProcessor.Factory(userAgentParsers));
+        return Map.of(UserAgentProcessor.TYPE, new UserAgentProcessor.Factory(userAgentParsers));
     }
 
     static Map<String, UserAgentParser> createUserAgentParsers(Path userAgentConfigDirectory, UserAgentCache cache) throws IOException {
         Map<String, UserAgentParser> userAgentParsers = new HashMap<>();
 
-        UserAgentParser defaultParser = new UserAgentParser(DEFAULT_PARSER_NAME,
-                IngestUserAgentPlugin.class.getResourceAsStream("/regexes.yml"), cache);
+        UserAgentParser defaultParser = new UserAgentParser(
+            DEFAULT_PARSER_NAME,
+            IngestUserAgentPlugin.class.getResourceAsStream("/regexes.yml"),
+            IngestUserAgentPlugin.class.getResourceAsStream("/device_type_regexes.yml"),
+            cache
+        );
         userAgentParsers.put(DEFAULT_PARSER_NAME, defaultParser);
 
         if (Files.exists(userAgentConfigDirectory) && Files.isDirectory(userAgentConfigDirectory)) {
             PathMatcher pathMatcher = userAgentConfigDirectory.getFileSystem().getPathMatcher("glob:**.yml");
 
-            try (Stream<Path> regexFiles = Files.find(userAgentConfigDirectory, 1,
-                    (path, attr) -> attr.isRegularFile() && pathMatcher.matches(path))) {
+            try (
+                Stream<Path> regexFiles = Files.find(
+                    userAgentConfigDirectory,
+                    1,
+                    (path, attr) -> attr.isRegularFile() && pathMatcher.matches(path)
+                )
+            ) {
                 Iterable<Path> iterable = regexFiles::iterator;
                 for (Path path : iterable) {
                     String parserName = path.getFileName().toString();
-                    try (InputStream regexStream = Files.newInputStream(path, StandardOpenOption.READ)) {
-                        userAgentParsers.put(parserName, new UserAgentParser(parserName, regexStream, cache));
+                    try (
+                        InputStream regexStream = Files.newInputStream(path, StandardOpenOption.READ);
+                        InputStream deviceTypeRegexStream = IngestUserAgentPlugin.class.getResourceAsStream("/device_type_regexes.yml")
+                    ) {
+                        userAgentParsers.put(parserName, new UserAgentParser(parserName, regexStream, deviceTypeRegexStream, cache));
                     }
                 }
             }
         }
 
-        return Collections.unmodifiableMap(userAgentParsers);
+        return Map.copyOf(userAgentParsers);
     }
 
     @Override
     public List<Setting<?>> getSettings() {
-        return Collections.singletonList(CACHE_SIZE_SETTING);
+        return List.of(CACHE_SIZE_SETTING);
     }
 }

@@ -12,11 +12,9 @@ import org.apache.lucene.document.LongPoint;
 import org.apache.lucene.document.NumericDocValuesField;
 import org.apache.lucene.document.SortedNumericDocValuesField;
 import org.apache.lucene.index.DirectoryReader;
-import org.apache.lucene.index.IndexReader;
-import org.apache.lucene.index.RandomIndexWriter;
-import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.store.Directory;
+import org.apache.lucene.tests.index.RandomIndexWriter;
 import org.apache.lucene.util.NumericUtils;
 import org.elasticsearch.index.mapper.DateFieldMapper;
 import org.elasticsearch.index.mapper.MappedFieldType;
@@ -28,7 +26,6 @@ import org.elasticsearch.search.aggregations.metrics.PercentilesConfig;
 
 import java.io.IOException;
 
-
 public class MovingPercentilesHDRAggregatorTests extends MovingPercentilesAbstractAggregatorTests {
 
     @Override
@@ -37,8 +34,7 @@ public class MovingPercentilesHDRAggregatorTests extends MovingPercentilesAbstra
     }
 
     @Override
-    protected  void executeTestCase(int window, int shift, Query query,
-                                 DateHistogramAggregationBuilder aggBuilder) throws IOException {
+    protected void executeTestCase(int window, int shift, Query query, DateHistogramAggregationBuilder aggBuilder) throws IOException {
 
         DoubleHistogram[] states = new DoubleHistogram[datasetTimes.size()];
         try (Directory directory = newDirectory()) {
@@ -49,7 +45,7 @@ public class MovingPercentilesHDRAggregatorTests extends MovingPercentilesAbstra
                     states[counter] = new DoubleHistogram(1);
                     final int numberDocs = randomIntBetween(5, 50);
                     long instant = asLong(date);
-                    for (int i =0; i < numberDocs; i++) {
+                    for (int i = 0; i < numberDocs; i++) {
                         if (frequently()) {
                             indexWriter.commit();
                         }
@@ -65,16 +61,15 @@ public class MovingPercentilesHDRAggregatorTests extends MovingPercentilesAbstra
                 }
             }
 
-            try (IndexReader indexReader = DirectoryReader.open(directory)) {
-                IndexSearcher indexSearcher = newSearcher(indexReader, true, true);
-
+            try (DirectoryReader indexReader = DirectoryReader.open(directory)) {
                 DateFieldMapper.DateFieldType fieldType = new DateFieldMapper.DateFieldType(aggBuilder.field());
-                MappedFieldType valueFieldType
-                    = new NumberFieldMapper.NumberFieldType("value_field", NumberFieldMapper.NumberType.DOUBLE);
+                MappedFieldType valueFieldType = new NumberFieldMapper.NumberFieldType("value_field", NumberFieldMapper.NumberType.DOUBLE);
 
                 InternalDateHistogram histogram;
-                histogram = searchAndReduce(indexSearcher, query, aggBuilder, 1000,
-                    new MappedFieldType[]{fieldType, valueFieldType});
+                histogram = searchAndReduce(
+                    indexReader,
+                    new AggTestConfig(aggBuilder, fieldType, valueFieldType).withMaxBuckets(1000).withQuery(query)
+                );
                 for (int i = 0; i < histogram.getBuckets().size(); i++) {
                     InternalDateHistogram.Bucket bucket = histogram.getBuckets().get(i);
                     InternalHDRPercentiles values = bucket.getAggregations().get("MovingPercentiles");

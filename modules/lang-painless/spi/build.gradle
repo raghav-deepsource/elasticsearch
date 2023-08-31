@@ -10,11 +10,12 @@ apply plugin: 'elasticsearch.build'
 apply plugin: 'elasticsearch.publish'
 
 group = 'org.elasticsearch.plugin'
-archivesBaseName = 'elasticsearch-scripting-painless-spi'
 
-dependencies {
-  api project(":server")
+base {
+  archivesName = 'elasticsearch-scripting-painless-spi'
 }
 
-// no tests...yet?
-tasks.named("test").configure { enabled = false }
+dependencies {
+  compileOnly project(":server")
+  testImplementation project(":test:framework")
+}

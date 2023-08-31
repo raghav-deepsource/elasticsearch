@@ -21,9 +21,9 @@ import java.io.IOException;
  */
 class RecoveryHandoffPrimaryContextRequest extends TransportRequest {
 
-    private long recoveryId;
-    private ShardId shardId;
-    private ReplicationTracker.PrimaryContext primaryContext;
+    private final long recoveryId;
+    private final ShardId shardId;
+    private final ReplicationTracker.PrimaryContext primaryContext;
 
     /**
      * Initialize an empty request (used to serialize into when reading from a stream).
@@ -42,8 +42,11 @@ class RecoveryHandoffPrimaryContextRequest extends TransportRequest {
      * @param shardId        the shard ID of the relocation
      * @param primaryContext the primary context
      */
-    RecoveryHandoffPrimaryContextRequest(final long recoveryId, final ShardId shardId,
-                                         final ReplicationTracker.PrimaryContext primaryContext) {
+    RecoveryHandoffPrimaryContextRequest(
+        final long recoveryId,
+        final ShardId shardId,
+        final ReplicationTracker.PrimaryContext primaryContext
+    ) {
         this.recoveryId = recoveryId;
         this.shardId = shardId;
         this.primaryContext = primaryContext;
@@ -71,10 +74,13 @@ class RecoveryHandoffPrimaryContextRequest extends TransportRequest {
 
     @Override
     public String toString() {
-        return "RecoveryHandoffPrimaryContextRequest{" +
-                "recoveryId=" + recoveryId +
-                ", shardId=" + shardId +
-                ", primaryContext=" + primaryContext +
-                '}';
+        return "RecoveryHandoffPrimaryContextRequest{"
+            + "recoveryId="
+            + recoveryId
+            + ", shardId="
+            + shardId
+            + ", primaryContext="
+            + primaryContext
+            + '}';
     }
 }

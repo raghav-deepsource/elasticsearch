@@ -8,7 +8,7 @@
 
 package org.elasticsearch.action.support.master.info;
 
-import org.elasticsearch.Version;
+import org.elasticsearch.TransportVersion;
 import org.elasticsearch.action.IndicesRequest;
 import org.elasticsearch.action.support.IndicesOptions;
 import org.elasticsearch.action.support.master.MasterNodeReadRequest;
@@ -19,19 +19,19 @@ import org.elasticsearch.common.io.stream.StreamOutput;
 import java.io.IOException;
 
 public abstract class ClusterInfoRequest<Request extends ClusterInfoRequest<Request>> extends MasterNodeReadRequest<Request>
-        implements IndicesRequest.Replaceable {
+    implements
+        IndicesRequest.Replaceable {
 
     private String[] indices = Strings.EMPTY_ARRAY;
 
     private IndicesOptions indicesOptions = IndicesOptions.strictExpandOpen();
 
-    public ClusterInfoRequest() {
-    }
+    public ClusterInfoRequest() {}
 
     public ClusterInfoRequest(StreamInput in) throws IOException {
         super(in);
         indices = in.readStringArray();
-        if (in.getVersion().before(Version.V_8_0_0)) {
+        if (in.getTransportVersion().before(TransportVersion.V_8_0_0)) {
             in.readStringArray();
         }
         indicesOptions = IndicesOptions.readIndicesOptions(in);
@@ -41,7 +41,7 @@ public abstract class ClusterInfoRequest<Request extends ClusterInfoRequest<Requ
     public void writeTo(StreamOutput out) throws IOException {
         super.writeTo(out);
         out.writeStringArray(indices);
-        if (out.getVersion().before(Version.V_8_0_0)) {
+        if (out.getTransportVersion().before(TransportVersion.V_8_0_0)) {
             out.writeStringArray(Strings.EMPTY_ARRAY);
         }
         indicesOptions.writeIndicesOptions(out);

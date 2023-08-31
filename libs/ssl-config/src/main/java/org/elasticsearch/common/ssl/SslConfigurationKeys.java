@@ -8,12 +8,13 @@
 
 package org.elasticsearch.common.ssl;
 
-import javax.net.ssl.TrustManagerFactory;
 import java.security.KeyStore;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+
+import javax.net.ssl.TrustManagerFactory;
 
 /**
  * Utility class for handling the standard setting keys for use in SSL configuration.
@@ -70,6 +71,12 @@ public class SslConfigurationKeys {
      */
     public static final String TRUSTSTORE_ALGORITHM = "truststore.algorithm";
 
+    /**
+     * The fields from the X509 certificate used for restricted trust. Internationally omitted from the list of setting returned by methods
+     * in this class. This is not a general purpose ssl configuration.
+     */
+    public static final String TRUST_RESTRICTIONS_X509_FIELDS = "trust_restrictions.x509_fields";
+
     // Key Management
     // -- Keystore
     /**
@@ -102,7 +109,7 @@ public class SslConfigurationKeys {
     public static final String KEYSTORE_TYPE = "keystore.type";
     /**
      * The {@link javax.net.ssl.KeyManagerFactory#getAlgorithm() key management algorithm} to use when
-     * connstructing a Key manager from a {@link #KEYSTORE_PATH keystore}.
+     * constructing a Key manager from a {@link #KEYSTORE_PATH keystore}.
      */
     public static final String KEYSTORE_ALGORITHM = "keystore.algorithm";
     // -- PEM
@@ -138,10 +145,20 @@ public class SslConfigurationKeys {
      */
     public static List<String> getStringKeys() {
         return Arrays.asList(
-            VERIFICATION_MODE, CLIENT_AUTH,
-            TRUSTSTORE_PATH, TRUSTSTORE_LEGACY_PASSWORD, TRUSTSTORE_TYPE, TRUSTSTORE_TYPE,
-            KEYSTORE_PATH, KEYSTORE_LEGACY_PASSWORD, KEYSTORE_LEGACY_KEY_PASSWORD, KEYSTORE_TYPE, KEYSTORE_ALGORITHM,
-            CERTIFICATE, KEY, KEY_LEGACY_PASSPHRASE
+            VERIFICATION_MODE,
+            CLIENT_AUTH,
+            TRUSTSTORE_PATH,
+            TRUSTSTORE_LEGACY_PASSWORD,
+            TRUSTSTORE_TYPE,
+            TRUSTSTORE_TYPE,
+            KEYSTORE_PATH,
+            KEYSTORE_LEGACY_PASSWORD,
+            KEYSTORE_LEGACY_KEY_PASSWORD,
+            KEYSTORE_TYPE,
+            KEYSTORE_ALGORITHM,
+            CERTIFICATE,
+            KEY,
+            KEY_LEGACY_PASSPHRASE
         );
     }
 

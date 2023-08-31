@@ -7,15 +7,18 @@
  */
 package org.elasticsearch.action.bulk;
 
-import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.elasticsearch.ExceptionsHelper;
 import org.elasticsearch.action.ActionListener;
+import org.elasticsearch.action.DelegatingActionListener;
+import org.elasticsearch.action.DocWriteRequest;
+import org.elasticsearch.action.index.IndexRequest;
 import org.elasticsearch.action.support.PlainActionFuture;
-import org.elasticsearch.common.unit.TimeValue;
+import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.rest.RestStatus;
 import org.elasticsearch.threadpool.Scheduler;
 import org.elasticsearch.threadpool.ThreadPool;
-import org.elasticsearch.transport.RemoteTransportException;
 
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -42,8 +45,11 @@ public class Retry {
      * @param bulkRequest The bulk request that should be executed.
      * @param listener A listener that is invoked when the bulk request finishes or completes with an exception. The listener is not
      */
-    public void withBackoff(BiConsumer<BulkRequest, ActionListener<BulkResponse>> consumer, BulkRequest bulkRequest,
-                            ActionListener<BulkResponse> listener) {
+    public void withBackoff(
+        BiConsumer<BulkRequest, ActionListener<BulkResponse>> consumer,
+        BulkRequest bulkRequest,
+        ActionListener<BulkResponse> listener
+    ) {
         RetryHandler r = new RetryHandler(backoffPolicy, consumer, listener, scheduler);
         r.execute(bulkRequest);
     }
@@ -56,14 +62,16 @@ public class Retry {
      * @param bulkRequest The bulk request that should be executed.
      * @return a future representing the bulk response returned by the client.
      */
-    public PlainActionFuture<BulkResponse> withBackoff(BiConsumer<BulkRequest, ActionListener<BulkResponse>> consumer,
-                                                       BulkRequest bulkRequest) {
+    public PlainActionFuture<BulkResponse> withBackoff(
+        BiConsumer<BulkRequest, ActionListener<BulkResponse>> consumer,
+        BulkRequest bulkRequest
+    ) {
         PlainActionFuture<BulkResponse> future = PlainActionFuture.newFuture();
         withBackoff(consumer, bulkRequest, future);
         return future;
     }
 
-    static class RetryHandler extends ActionListener.Delegating<BulkResponse, BulkResponse> {
+    static class RetryHandler extends DelegatingActionListener<BulkResponse, BulkResponse> {
         private static final RestStatus RETRY_STATUS = RestStatus.TOO_MANY_REQUESTS;
         private static final Logger logger = LogManager.getLogger(RetryHandler.class);
 
@@ -78,8 +86,12 @@ public class Retry {
         private volatile BulkRequest currentBulkRequest;
         private volatile Scheduler.Cancellable retryCancellable;
 
-        RetryHandler(BackoffPolicy backoffPolicy, BiConsumer<BulkRequest, ActionListener<BulkResponse>> consumer,
-                     ActionListener<BulkResponse> listener, Scheduler scheduler) {
+        RetryHandler(
+            BackoffPolicy backoffPolicy,
+            BiConsumer<BulkRequest, ActionListener<BulkResponse>> consumer,
+            ActionListener<BulkResponse> listener,
+            Scheduler scheduler
+        ) {
             super(listener);
             this.backoff = backoffPolicy.iterator();
             this.consumer = consumer;
@@ -107,7 +119,7 @@ public class Retry {
 
         @Override
         public void onFailure(Exception e) {
-            if (e instanceof RemoteTransportException && ((RemoteTransportException) e).status() == RETRY_STATUS && backoff.hasNext()) {
+            if (ExceptionsHelper.status(e) == RETRY_STATUS && backoff.hasNext()) {
                 retry(currentBulkRequest);
             } else {
                 try {
@@ -132,7 +144,11 @@ public class Retry {
             int index = 0;
             for (BulkItemResponse bulkItemResponse : bulkItemResponses.getItems()) {
                 if (bulkItemResponse.isFailed()) {
-                    requestToReissue.add(currentBulkRequest.requests().get(index));
+                    DocWriteRequest<?> originalBulkItemRequest = currentBulkRequest.requests().get(index);
+                    if (originalBulkItemRequest instanceof IndexRequest item) {
+                        item.reset();
+                    }
+                    requestToReissue.add(originalBulkItemRequest);
                 }
                 index++;
             }
@@ -180,7 +196,7 @@ public class Retry {
         private BulkResponse getAccumulatedResponse() {
             BulkItemResponse[] itemResponses;
             synchronized (responses) {
-                itemResponses = responses.toArray(new BulkItemResponse[1]);
+                itemResponses = responses.toArray(new BulkItemResponse[0]);
             }
             long stopTimestamp = System.nanoTime();
             long totalLatencyMs = TimeValue.timeValueNanos(stopTimestamp - startTimestampNanos).millis();

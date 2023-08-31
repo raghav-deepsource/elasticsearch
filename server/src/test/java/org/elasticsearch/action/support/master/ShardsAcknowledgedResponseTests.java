@@ -7,7 +7,7 @@
  */
 package org.elasticsearch.action.support.master;
 
-import org.elasticsearch.Version;
+import org.elasticsearch.TransportVersion;
 import org.elasticsearch.common.io.stream.NamedWriteableRegistry;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
@@ -23,12 +23,21 @@ public class ShardsAcknowledgedResponseTests extends ESTestCase {
     public void testSerialization() throws Exception {
         ShardsAcknowledgedResponse testInstance = new TestImpl(true, true);
 
-        ShardsAcknowledgedResponse result =
-            copyWriteable(testInstance, new NamedWriteableRegistry(List.of()), in -> new TestImpl(in, true), Version.CURRENT);
+        ShardsAcknowledgedResponse result = copyWriteable(
+            testInstance,
+            new NamedWriteableRegistry(List.of()),
+            in -> new TestImpl(in, true),
+            TransportVersion.current()
+        );
         assertThat(result.isAcknowledged(), is(true));
         assertThat(result.isShardsAcknowledged(), is(true));
 
-        result = copyWriteable(testInstance, new NamedWriteableRegistry(List.of()), in -> new TestImpl(in, false), Version.CURRENT);
+        result = copyWriteable(
+            testInstance,
+            new NamedWriteableRegistry(List.of()),
+            in -> new TestImpl(in, false),
+            TransportVersion.current()
+        );
         assertThat(result.isAcknowledged(), is(true));
         assertThat(result.isShardsAcknowledged(), is(false));
     }

@@ -7,18 +7,20 @@
  */
 package org.elasticsearch.search.internal;
 
-
-import org.apache.lucene.search.Collector;
 import org.apache.lucene.search.FieldDoc;
 import org.apache.lucene.search.Query;
+import org.apache.lucene.search.TotalHits;
 import org.elasticsearch.action.search.SearchShardTask;
 import org.elasticsearch.action.search.SearchType;
-import org.elasticsearch.common.Nullable;
-import org.elasticsearch.common.lease.Releasable;
-import org.elasticsearch.common.lease.Releasables;
-import org.elasticsearch.common.unit.TimeValue;
+import org.elasticsearch.core.Nullable;
+import org.elasticsearch.core.Releasable;
+import org.elasticsearch.core.Releasables;
+import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.index.cache.bitset.BitsetFilterCache;
+import org.elasticsearch.index.mapper.IdLoader;
+import org.elasticsearch.index.mapper.SourceLoader;
 import org.elasticsearch.index.query.ParsedQuery;
+import org.elasticsearch.index.query.QueryShardException;
 import org.elasticsearch.index.query.SearchExecutionContext;
 import org.elasticsearch.index.shard.IndexShard;
 import org.elasticsearch.search.RescoreDocIds;
@@ -38,10 +40,12 @@ import org.elasticsearch.search.fetch.subphase.ScriptFieldsContext;
 import org.elasticsearch.search.fetch.subphase.highlight.SearchHighlightContext;
 import org.elasticsearch.search.profile.Profilers;
 import org.elasticsearch.search.query.QuerySearchResult;
+import org.elasticsearch.search.rank.RankShardContext;
 import org.elasticsearch.search.rescore.RescoreContext;
 import org.elasticsearch.search.sort.SortAndFormats;
 import org.elasticsearch.search.suggest.SuggestionSearchContext;
 
+import java.io.IOException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -65,6 +69,8 @@ public abstract class SearchContext implements Releasable {
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private InnerHitsContext innerHitsContext;
 
+    private Query rewriteQuery;
+
     protected SearchContext() {}
 
     public abstract void setTask(SearchShardTask task);
@@ -82,9 +88,8 @@ public abstract class SearchContext implements Releasable {
 
     /**
      * Should be called before executing the main query and after all other parameters have been set.
-     * @param rewrite if the set query should be rewritten against the searcher returned from {@link #searcher()}
      */
-    public abstract void preProcess(boolean rewrite);
+    public abstract void preProcess();
 
     /** Automatically apply all required filters to the given query such as
      *  alias filters, types filters, etc. */
@@ -126,6 +131,10 @@ public abstract class SearchContext implements Releasable {
     public abstract SuggestionSearchContext suggest();
 
     public abstract void suggest(SuggestionSearchContext suggest);
+
+    public abstract RankShardContext rankShardContext();
+
+    public abstract void rankShardContext(RankShardContext rankShardContext);
 
     /**
      * @return list of all rescore contexts.  empty if there aren't any.
@@ -252,9 +261,26 @@ public abstract class SearchContext implements Releasable {
     public abstract ParsedQuery parsedQuery();
 
     /**
-     * The query to execute, might be rewritten.
+     * The query to execute, not rewritten.
      */
     public abstract Query query();
+
+    /**
+     * The query to execute in its rewritten form.
+     */
+    public Query rewrittenQuery() {
+        if (query() == null) {
+            throw new IllegalStateException("preProcess must be called first");
+        }
+        if (rewriteQuery == null) {
+            try {
+                this.rewriteQuery = searcher().rewrite(query());
+            } catch (IOException exc) {
+                throw new QueryShardException(getSearchExecutionContext(), "rewrite failed", exc);
+            }
+        }
+        return rewriteQuery;
+    }
 
     public abstract int from();
 
@@ -291,23 +317,42 @@ public abstract class SearchContext implements Releasable {
 
     public abstract int[] docIdsToLoad();
 
-    public abstract int docIdsToLoadSize();
-
-    public abstract SearchContext docIdsToLoad(int[] docIdsToLoad, int docsIdsToLoadSize);
+    public abstract SearchContext docIdsToLoad(int[] docIdsToLoad);
 
     public abstract DfsSearchResult dfsResult();
 
+    /**
+     * Indicates that the caller will be using, and thus owning, a {@link DfsSearchResult} object.  It is the caller's responsibility
+     * to correctly cleanup this result object.
+     */
+    public abstract void addDfsResult();
+
     public abstract QuerySearchResult queryResult();
+
+    /**
+     * Indicates that the caller will be using, and thus owning, a {@link QuerySearchResult} object.  It is the caller's responsibility
+     * to correctly cleanup this result object.
+     */
+    public abstract void addQueryResult();
+
+    public abstract TotalHits getTotalHits();
+
+    public abstract float getMaxScore();
 
     public abstract FetchPhase fetchPhase();
 
     public abstract FetchSearchResult fetchResult();
 
     /**
+     * Indicates that the caller will be using, and thus owning, a {@link FetchSearchResult} object.  It is the caller's responsibility
+     * to correctly cleanup this result object.
+     */
+    public abstract void addFetchResult();
+
+    /**
      * Return a handle over the profilers for the current search request, or {@code null} if profiling is not enabled.
      */
     public abstract Profilers getProfilers();
-
 
     /**
      * Adds a releasable that will be freed when this context is closed.
@@ -320,8 +365,7 @@ public abstract class SearchContext implements Releasable {
      * @return true if the request contains only suggest
      */
     public final boolean hasOnlySuggest() {
-        return request().source() != null
-            && request().source().isSuggestOnly();
+        return request().source() != null && request().source().isSuggestOnly();
     }
 
     /**
@@ -329,9 +373,6 @@ public abstract class SearchContext implements Releasable {
      * WARN: This is not the epoch time.
      */
     public abstract long getRelativeTimeInMillis();
-
-    /** Return a view of the additional query collectors that should be run for this context. */
-    public abstract Map<Class<?>, Collector> queryCollectors();
 
     public abstract SearchExecutionContext getSearchExecutionContext();
 
@@ -353,4 +394,11 @@ public abstract class SearchContext implements Releasable {
     }
 
     public abstract ReaderContext readerContext();
+
+    /**
+     * Build something to load source {@code _source}.
+     */
+    public abstract SourceLoader newSourceLoader();
+
+    public abstract IdLoader newIdLoader();
 }

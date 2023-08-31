@@ -10,16 +10,14 @@ package org.elasticsearch.action.support;
 
 import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.action.ActionListener;
-import org.elasticsearch.cluster.coordination.DeterministicTaskQueue;
-import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.common.unit.TimeValue;
+import org.elasticsearch.common.util.concurrent.DeterministicTaskQueue;
 import org.elasticsearch.common.util.concurrent.EsRejectedExecutionException;
+import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.test.ESTestCase;
 import org.junit.Before;
 
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static org.elasticsearch.node.Node.NODE_NAME_SETTING;
 import static org.hamcrest.Matchers.lessThanOrEqualTo;
 
 public class RetryableActionTests extends ESTestCase {
@@ -29,15 +27,19 @@ public class RetryableActionTests extends ESTestCase {
     @Before
     public void setUp() throws Exception {
         super.setUp();
-        Settings settings = Settings.builder().put(NODE_NAME_SETTING.getKey(), "node").build();
-        taskQueue = new DeterministicTaskQueue(settings, random());
+        taskQueue = new DeterministicTaskQueue();
     }
 
     public void testRetryableActionNoRetries() {
         final AtomicInteger executedCount = new AtomicInteger();
         final PlainActionFuture<Boolean> future = PlainActionFuture.newFuture();
-        final RetryableAction<Boolean> retryableAction = new RetryableAction<>(logger, taskQueue.getThreadPool(),
-            TimeValue.timeValueMillis(10), TimeValue.timeValueSeconds(30), future) {
+        final RetryableAction<Boolean> retryableAction = new RetryableAction<>(
+            logger,
+            taskQueue.getThreadPool(),
+            TimeValue.timeValueMillis(10),
+            TimeValue.timeValueSeconds(30),
+            future
+        ) {
 
             @Override
             public void tryAction(ActionListener<Boolean> listener) {
@@ -62,8 +64,13 @@ public class RetryableActionTests extends ESTestCase {
         final AtomicInteger remainingFailedCount = new AtomicInteger(expectedRetryCount);
         final AtomicInteger retryCount = new AtomicInteger();
         final PlainActionFuture<Boolean> future = PlainActionFuture.newFuture();
-        final RetryableAction<Boolean> retryableAction = new RetryableAction<>(logger, taskQueue.getThreadPool(),
-            TimeValue.timeValueMillis(10), TimeValue.timeValueSeconds(30), future) {
+        final RetryableAction<Boolean> retryableAction = new RetryableAction<>(
+            logger,
+            taskQueue.getThreadPool(),
+            TimeValue.timeValueMillis(10),
+            TimeValue.timeValueSeconds(30),
+            future
+        ) {
 
             @Override
             public void tryAction(ActionListener<Boolean> listener) {
@@ -104,8 +111,13 @@ public class RetryableActionTests extends ESTestCase {
     public void testRetryableActionTimeout() {
         final AtomicInteger retryCount = new AtomicInteger();
         final PlainActionFuture<Boolean> future = PlainActionFuture.newFuture();
-        final RetryableAction<Boolean> retryableAction = new RetryableAction<>(logger, taskQueue.getThreadPool(),
-            TimeValue.timeValueMillis(10), TimeValue.timeValueSeconds(1), future) {
+        final RetryableAction<Boolean> retryableAction = new RetryableAction<>(
+            logger,
+            taskQueue.getThreadPool(),
+            TimeValue.timeValueMillis(randomFrom(1, 10, randomIntBetween(100, 2000))),
+            TimeValue.timeValueSeconds(1),
+            future
+        ) {
 
             @Override
             public void tryAction(ActionListener<Boolean> listener) {
@@ -122,6 +134,7 @@ public class RetryableActionTests extends ESTestCase {
                 return e instanceof EsRejectedExecutionException;
             }
         };
+        long begin = taskQueue.getCurrentTimeMillis();
         retryableAction.run();
         taskQueue.runAllRunnableTasks();
         long previousDeferredTime = 0;
@@ -136,13 +149,22 @@ public class RetryableActionTests extends ESTestCase {
         assertFalse(taskQueue.hasRunnableTasks());
 
         expectThrows(EsRejectedExecutionException.class, future::actionGet);
+
+        long end = taskQueue.getCurrentTimeMillis();
+        // max 20% greater than the timeout.
+        assertThat(end - begin, lessThanOrEqualTo(1200L));
     }
 
     public void testTimeoutOfZeroMeansNoRetry() {
         final AtomicInteger executedCount = new AtomicInteger();
         final PlainActionFuture<Boolean> future = PlainActionFuture.newFuture();
-        final RetryableAction<Boolean> retryableAction = new RetryableAction<>(logger, taskQueue.getThreadPool(),
-            TimeValue.timeValueMillis(10), TimeValue.timeValueSeconds(0), future) {
+        final RetryableAction<Boolean> retryableAction = new RetryableAction<>(
+            logger,
+            taskQueue.getThreadPool(),
+            TimeValue.timeValueMillis(10),
+            TimeValue.timeValueSeconds(0),
+            future
+        ) {
 
             @Override
             public void tryAction(ActionListener<Boolean> listener) {
@@ -165,8 +187,13 @@ public class RetryableActionTests extends ESTestCase {
     public void testFailedBecauseNotRetryable() {
         final AtomicInteger executedCount = new AtomicInteger();
         final PlainActionFuture<Boolean> future = PlainActionFuture.newFuture();
-        final RetryableAction<Boolean> retryableAction = new RetryableAction<>(logger, taskQueue.getThreadPool(),
-            TimeValue.timeValueMillis(10), TimeValue.timeValueSeconds(30), future) {
+        final RetryableAction<Boolean> retryableAction = new RetryableAction<>(
+            logger,
+            taskQueue.getThreadPool(),
+            TimeValue.timeValueMillis(10),
+            TimeValue.timeValueSeconds(30),
+            future
+        ) {
 
             @Override
             public void tryAction(ActionListener<Boolean> listener) {
@@ -189,8 +216,13 @@ public class RetryableActionTests extends ESTestCase {
     public void testRetryableActionCancelled() {
         final AtomicInteger executedCount = new AtomicInteger();
         final PlainActionFuture<Boolean> future = PlainActionFuture.newFuture();
-        final RetryableAction<Boolean> retryableAction = new RetryableAction<>(logger, taskQueue.getThreadPool(),
-            TimeValue.timeValueMillis(10), TimeValue.timeValueSeconds(30), future) {
+        final RetryableAction<Boolean> retryableAction = new RetryableAction<>(
+            logger,
+            taskQueue.getThreadPool(),
+            TimeValue.timeValueMillis(10),
+            TimeValue.timeValueSeconds(30),
+            future
+        ) {
 
             @Override
             public void tryAction(ActionListener<Boolean> listener) {
@@ -217,5 +249,48 @@ public class RetryableActionTests extends ESTestCase {
         // A second run will not occur because it is cancelled
         assertEquals(1, executedCount.get());
         expectThrows(ElasticsearchException.class, future::actionGet);
+    }
+
+    public void testMaxDelayBound() {
+        final PlainActionFuture<Boolean> future = PlainActionFuture.newFuture();
+        final RetryableAction<Boolean> retryableAction = new RetryableAction<>(
+            logger,
+            taskQueue.getThreadPool(),
+            TimeValue.timeValueMillis(10),
+            TimeValue.timeValueMillis(50),
+            TimeValue.timeValueSeconds(1),
+            future
+        ) {
+
+            @Override
+            public void tryAction(ActionListener<Boolean> listener) {
+                if (randomBoolean()) {
+                    listener.onFailure(new EsRejectedExecutionException());
+                } else {
+                    throw new EsRejectedExecutionException();
+                }
+            }
+
+            @Override
+            public boolean shouldRetry(Exception e) {
+                return e instanceof EsRejectedExecutionException;
+            }
+        };
+        retryableAction.run();
+        taskQueue.runAllRunnableTasks();
+        long previousDeferredTime = 0;
+        while (previousDeferredTime < 1000) {
+            assertTrue(taskQueue.hasDeferredTasks());
+            long latestDeferredExecutionTime = taskQueue.getLatestDeferredExecutionTime();
+            assertThat(latestDeferredExecutionTime - previousDeferredTime, lessThanOrEqualTo(50L));
+            previousDeferredTime = latestDeferredExecutionTime;
+            taskQueue.advanceTime();
+            taskQueue.runAllRunnableTasks();
+        }
+
+        assertFalse(taskQueue.hasDeferredTasks());
+        assertFalse(taskQueue.hasRunnableTasks());
+
+        expectThrows(EsRejectedExecutionException.class, future::actionGet);
     }
 }

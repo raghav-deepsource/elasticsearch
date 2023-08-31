@@ -9,7 +9,7 @@ package org.elasticsearch.xpack.analytics.action;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.support.ActionFilters;
 import org.elasticsearch.action.support.PlainActionFuture;
-import org.elasticsearch.client.Client;
+import org.elasticsearch.client.internal.Client;
 import org.elasticsearch.cluster.ClusterName;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.node.DiscoveryNode;
@@ -17,6 +17,7 @@ import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.io.stream.BytesStreamOutput;
 import org.elasticsearch.tasks.Task;
 import org.elasticsearch.test.ESTestCase;
+import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.TransportService;
 import org.elasticsearch.xpack.core.XPackFeatureSet;
 import org.elasticsearch.xpack.core.action.XPackUsageFeatureResponse;
@@ -28,8 +29,8 @@ import org.mockito.stubbing.Answer;
 import java.util.Collections;
 
 import static org.hamcrest.core.Is.is;
-import static org.mockito.Matchers.any;
-import static org.mockito.Matchers.eq;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
@@ -58,12 +59,17 @@ public class AnalyticsInfoTransportActionTests extends ESTestCase {
     }
 
     public void testAvailable() throws Exception {
-        AnalyticsInfoTransportAction featureSet = new AnalyticsInfoTransportAction(
-            mock(TransportService.class), mock(ActionFilters.class));
+        AnalyticsInfoTransportAction featureSet = new AnalyticsInfoTransportAction(mock(TransportService.class), mock(ActionFilters.class));
         assertThat(featureSet.available(), is(true));
         Client client = mockClient();
-        AnalyticsUsageTransportAction usageAction = new AnalyticsUsageTransportAction(mock(TransportService.class), clusterService, null,
-            mock(ActionFilters.class), null, client);
+        AnalyticsUsageTransportAction usageAction = new AnalyticsUsageTransportAction(
+            mock(TransportService.class),
+            clusterService,
+            mock(ThreadPool.class),
+            mock(ActionFilters.class),
+            null,
+            client
+        );
         PlainActionFuture<XPackUsageFeatureResponse> future = new PlainActionFuture<>();
         usageAction.masterOperation(task, null, clusterState, future);
         XPackFeatureSet.Usage usage = future.get().getUsage();
@@ -78,13 +84,18 @@ public class AnalyticsInfoTransportActionTests extends ESTestCase {
     }
 
     public void testEnabled() throws Exception {
-        AnalyticsInfoTransportAction featureSet = new AnalyticsInfoTransportAction(
-            mock(TransportService.class), mock(ActionFilters.class));
+        AnalyticsInfoTransportAction featureSet = new AnalyticsInfoTransportAction(mock(TransportService.class), mock(ActionFilters.class));
         assertThat(featureSet.enabled(), is(true));
         assertTrue(featureSet.enabled());
         Client client = mockClient();
-        AnalyticsUsageTransportAction usageAction = new AnalyticsUsageTransportAction(mock(TransportService.class),
-            clusterService, null, mock(ActionFilters.class), null, client);
+        AnalyticsUsageTransportAction usageAction = new AnalyticsUsageTransportAction(
+            mock(TransportService.class),
+            clusterService,
+            mock(ThreadPool.class),
+            mock(ActionFilters.class),
+            null,
+            client
+        );
         PlainActionFuture<XPackUsageFeatureResponse> future = new PlainActionFuture<>();
         usageAction.masterOperation(task, null, clusterState, future);
         XPackFeatureSet.Usage usage = future.get().getUsage();
@@ -102,8 +113,8 @@ public class AnalyticsInfoTransportActionTests extends ESTestCase {
         Client client = mock(Client.class);
         doAnswer((Answer<Void>) invocation -> {
             @SuppressWarnings("unchecked")
-            ActionListener<AnalyticsStatsAction.Response> listener =
-                (ActionListener<AnalyticsStatsAction.Response>) invocation.getArguments()[2];
+            ActionListener<AnalyticsStatsAction.Response> listener = (ActionListener<AnalyticsStatsAction.Response>) invocation
+                .getArguments()[2];
             listener.onResponse(new AnalyticsStatsAction.Response(clusterName, Collections.emptyList(), Collections.emptyList()));
             return null;
         }).when(client).execute(eq(AnalyticsStatsAction.INSTANCE), any(), any());

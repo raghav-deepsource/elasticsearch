@@ -8,20 +8,25 @@
 package org.elasticsearch.action.support.replication;
 
 import org.apache.logging.log4j.Logger;
-import org.elasticsearch.action.support.WriteRequest;
-import org.elasticsearch.common.Nullable;
+import org.elasticsearch.core.Nullable;
 import org.elasticsearch.index.shard.IndexShard;
 import org.elasticsearch.index.translog.Translog;
+import org.elasticsearch.threadpool.ThreadPool;
+import org.elasticsearch.transport.TransportService;
 
 import java.util.concurrent.CountDownLatch;
 
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
 public abstract class TransportWriteActionTestHelper {
 
-
-    public static void performPostWriteActions(final IndexShard indexShard,
-                                              final WriteRequest<?> request,
-                                              @Nullable final Translog.Location location,
-                                              final Logger logger) {
+    public static void performPostWriteActions(
+        final IndexShard indexShard,
+        final ReplicatedWriteRequest<?> request,
+        @Nullable final Translog.Location location,
+        final Logger logger
+    ) {
         final CountDownLatch latch = new CountDownLatch(1);
         TransportWriteAction.RespondingWriteResult writerResult = new TransportWriteAction.RespondingWriteResult() {
             @Override
@@ -34,7 +39,19 @@ public abstract class TransportWriteActionTestHelper {
                 throw new AssertionError(ex);
             }
         };
-        new TransportWriteAction.AsyncAfterWriteAction(indexShard, request, location, writerResult, logger).run();
+
+        final var threadpool = mock(ThreadPool.class);
+        final var transportService = mock(TransportService.class);
+        when(transportService.getThreadPool()).thenReturn(threadpool);
+        new TransportWriteAction.AsyncAfterWriteAction(
+            indexShard,
+            request,
+            location,
+            writerResult,
+            logger,
+            new PostWriteRefresh(transportService),
+            null
+        ).run();
         try {
             latch.await();
         } catch (InterruptedException e) {

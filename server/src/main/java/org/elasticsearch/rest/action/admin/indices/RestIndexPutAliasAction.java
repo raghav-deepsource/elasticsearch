@@ -9,12 +9,14 @@ package org.elasticsearch.rest.action.admin.indices;
 
 import org.elasticsearch.action.admin.indices.alias.IndicesAliasesRequest;
 import org.elasticsearch.action.admin.indices.alias.IndicesAliasesRequest.AliasActions;
-import org.elasticsearch.client.node.NodeClient;
+import org.elasticsearch.client.internal.node.NodeClient;
 import org.elasticsearch.common.Strings;
-import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.rest.BaseRestHandler;
 import org.elasticsearch.rest.RestRequest;
+import org.elasticsearch.rest.Scope;
+import org.elasticsearch.rest.ServerlessScope;
 import org.elasticsearch.rest.action.RestToXContentListener;
+import org.elasticsearch.xcontent.XContentParser;
 
 import java.io.IOException;
 import java.util.List;
@@ -23,6 +25,7 @@ import java.util.Map;
 import static org.elasticsearch.rest.RestRequest.Method.POST;
 import static org.elasticsearch.rest.RestRequest.Method.PUT;
 
+@ServerlessScope(Scope.PUBLIC)
 public class RestIndexPutAliasAction extends BaseRestHandler {
 
     @Override
@@ -38,7 +41,8 @@ public class RestIndexPutAliasAction extends BaseRestHandler {
             new Route(PUT, "/_aliases/{name}"),
             new Route(PUT, "/{index}/_alias"),
             new Route(PUT, "/{index}/_aliases"),
-            new Route(PUT, "/_alias"));
+            new Route(PUT, "/_alias")
+        );
     }
 
     @Override
@@ -74,14 +78,16 @@ public class RestIndexPutAliasAction extends BaseRestHandler {
                         } else if ("routing".equals(currentFieldName)) {
                             routing = parser.textOrNull();
                         } else if ("indexRouting".equals(currentFieldName)
-                                || "index-routing".equals(currentFieldName) || "index_routing".equals(currentFieldName)) {
-                            indexRouting = parser.textOrNull();
-                        } else if ("searchRouting".equals(currentFieldName)
-                                || "search-routing".equals(currentFieldName) || "search_routing".equals(currentFieldName)) {
-                            searchRouting = parser.textOrNull();
-                        } else if ("is_write_index".equals(currentFieldName)) {
-                            writeIndex = parser.booleanValue();
-                        }
+                            || "index-routing".equals(currentFieldName)
+                            || "index_routing".equals(currentFieldName)) {
+                                indexRouting = parser.textOrNull();
+                            } else if ("searchRouting".equals(currentFieldName)
+                                || "search-routing".equals(currentFieldName)
+                                || "search_routing".equals(currentFieldName)) {
+                                    searchRouting = parser.textOrNull();
+                                } else if ("is_write_index".equals(currentFieldName)) {
+                                    writeIndex = parser.booleanValue();
+                                }
                     } else if (token == XContentParser.Token.START_OBJECT) {
                         if ("filter".equals(currentFieldName)) {
                             filter = parser.mapOrdered();

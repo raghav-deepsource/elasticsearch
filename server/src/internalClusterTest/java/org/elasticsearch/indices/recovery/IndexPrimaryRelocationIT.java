@@ -17,8 +17,7 @@ import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.node.DiscoveryNode;
 import org.elasticsearch.cluster.routing.allocation.command.MoveAllocationCommand;
 import org.elasticsearch.common.Priority;
-import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.common.unit.TimeValue;
+import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.index.query.QueryBuilders;
 import org.elasticsearch.test.ESIntegTestCase;
 import org.elasticsearch.test.hamcrest.ElasticsearchAssertions;
@@ -27,7 +26,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
-
 @ESIntegTestCase.ClusterScope(scope = ESIntegTestCase.Scope.TEST)
 public class IndexPrimaryRelocationIT extends ESIntegTestCase {
 
@@ -35,10 +33,7 @@ public class IndexPrimaryRelocationIT extends ESIntegTestCase {
 
     public void testPrimaryRelocationWhileIndexing() throws Exception {
         internalCluster().ensureAtLeastNumDataNodes(randomIntBetween(2, 3));
-        client().admin().indices().prepareCreate("test")
-            .setSettings(Settings.builder().put("index.number_of_shards", 1).put("index.number_of_replicas", 0))
-            .setMapping("field", "type=text")
-            .get();
+        indicesAdmin().prepareCreate("test").setSettings(indexSettings(1, 0)).setMapping("field", "type=text").get();
         ensureGreen("test");
         AtomicInteger numAutoGenDocs = new AtomicInteger();
         final AtomicBoolean finished = new AtomicBoolean(false);
@@ -57,28 +52,42 @@ public class IndexPrimaryRelocationIT extends ESIntegTestCase {
         };
         indexingThread.start();
 
-        ClusterState initialState = client().admin().cluster().prepareState().get().getState();
-        DiscoveryNode[] dataNodes = initialState.getNodes().getDataNodes().values().toArray(DiscoveryNode.class);
-        DiscoveryNode relocationSource = initialState.getNodes().getDataNodes().get(initialState.getRoutingTable()
-            .shardRoutingTable("test", 0).primaryShard().currentNodeId());
+        ClusterState initialState = clusterAdmin().prepareState().get().getState();
+        DiscoveryNode[] dataNodes = initialState.getNodes().getDataNodes().values().toArray(DiscoveryNode[]::new);
+        DiscoveryNode relocationSource = initialState.getNodes()
+            .getDataNodes()
+            .get(initialState.getRoutingTable().shardRoutingTable("test", 0).primaryShard().currentNodeId());
         for (int i = 0; i < RELOCATION_COUNT; i++) {
             DiscoveryNode relocationTarget = randomFrom(dataNodes);
             while (relocationTarget.equals(relocationSource)) {
                 relocationTarget = randomFrom(dataNodes);
             }
             logger.info("--> [iteration {}] relocating from {} to {} ", i, relocationSource.getName(), relocationTarget.getName());
-            client().admin().cluster().prepareReroute()
+            clusterAdmin().prepareReroute()
                 .add(new MoveAllocationCommand("test", 0, relocationSource.getId(), relocationTarget.getId()))
-                .execute().actionGet();
-            ClusterHealthResponse clusterHealthResponse = client().admin().cluster().prepareHealth()
+                .execute()
+                .actionGet();
+            ClusterHealthResponse clusterHealthResponse = clusterAdmin().prepareHealth()
                 .setTimeout(TimeValue.timeValueSeconds(60))
-                .setWaitForEvents(Priority.LANGUID).setWaitForNoRelocatingShards(true).execute().actionGet();
+                .setWaitForEvents(Priority.LANGUID)
+                .setWaitForNoRelocatingShards(true)
+                .execute()
+                .actionGet();
             if (clusterHealthResponse.isTimedOut()) {
-                final String hotThreads = client().admin().cluster().prepareNodesHotThreads().setIgnoreIdleThreads(false).get().getNodes()
-                    .stream().map(NodeHotThreads::getHotThreads).collect(Collectors.joining("\n"));
-                final ClusterState clusterState = client().admin().cluster().prepareState().get().getState();
-                logger.info("timed out for waiting for relocation iteration [{}] \ncluster state {} \nhot threads {}",
-                    i, clusterState, hotThreads);
+                final String hotThreads = clusterAdmin().prepareNodesHotThreads()
+                    .setIgnoreIdleThreads(false)
+                    .get()
+                    .getNodes()
+                    .stream()
+                    .map(NodeHotThreads::getHotThreads)
+                    .collect(Collectors.joining("\n"));
+                final ClusterState clusterState = clusterAdmin().prepareState().get().getState();
+                logger.info(
+                    "timed out for waiting for relocation iteration [{}] \ncluster state {} \nhot threads {}",
+                    i,
+                    clusterState,
+                    hotThreads
+                );
                 finished.set(true);
                 indexingThread.join();
                 throw new AssertionError("timed out waiting for relocation iteration [" + i + "] ");
@@ -89,17 +98,22 @@ public class IndexPrimaryRelocationIT extends ESIntegTestCase {
             if (indexingThread.isAlive() == false) {
                 break;
             }
-            if (i > 0  && i % 5 == 0) {
+            if (i > 0 && i % 5 == 0) {
                 logger.info("--> [iteration {}] flushing index", i);
-                client().admin().indices().prepareFlush("test").get();
+                indicesAdmin().prepareFlush("test").get();
             }
         }
         finished.set(true);
         indexingThread.join();
         refresh("test");
         ElasticsearchAssertions.assertHitCount(client().prepareSearch("test").setTrackTotalHits(true).get(), numAutoGenDocs.get());
-        ElasticsearchAssertions.assertHitCount(client().prepareSearch("test").setTrackTotalHits(true)// extra paranoia ;)
-            .setQuery(QueryBuilders.termQuery("auto", true)).get(), numAutoGenDocs.get());
+        ElasticsearchAssertions.assertHitCount(
+            client().prepareSearch("test")
+                .setTrackTotalHits(true)// extra paranoia ;)
+                .setQuery(QueryBuilders.termQuery("auto", true))
+                .get(),
+            numAutoGenDocs.get()
+        );
     }
 
 }

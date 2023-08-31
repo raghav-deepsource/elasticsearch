@@ -9,6 +9,7 @@ package org.elasticsearch.xpack.eql.execution.search;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.elasticsearch.Version;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.search.MultiSearchResponse;
 import org.elasticsearch.action.search.SearchRequest;
@@ -21,17 +22,22 @@ import org.elasticsearch.search.SearchHit;
 import org.elasticsearch.search.aggregations.Aggregation;
 import org.elasticsearch.search.builder.SearchSourceBuilder;
 import org.elasticsearch.xpack.eql.EqlIllegalArgumentException;
+import org.elasticsearch.xpack.eql.execution.search.extractor.CompositeKeyExtractor;
 import org.elasticsearch.xpack.eql.execution.search.extractor.FieldHitExtractor;
+import org.elasticsearch.xpack.eql.querydsl.container.CompositeAggRef;
 import org.elasticsearch.xpack.eql.querydsl.container.ComputedRef;
 import org.elasticsearch.xpack.eql.querydsl.container.SearchHitFieldRef;
 import org.elasticsearch.xpack.eql.session.EqlConfiguration;
 import org.elasticsearch.xpack.ql.execution.search.FieldExtraction;
+import org.elasticsearch.xpack.ql.execution.search.extractor.BucketExtractor;
 import org.elasticsearch.xpack.ql.execution.search.extractor.ComputingExtractor;
 import org.elasticsearch.xpack.ql.execution.search.extractor.HitExtractor;
+import org.elasticsearch.xpack.ql.expression.Expressions;
 import org.elasticsearch.xpack.ql.expression.gen.pipeline.HitExtractorInput;
 import org.elasticsearch.xpack.ql.expression.gen.pipeline.Pipe;
 import org.elasticsearch.xpack.ql.expression.gen.pipeline.ReferenceInput;
 import org.elasticsearch.xpack.ql.index.IndexResolver;
+import org.elasticsearch.xpack.ql.util.Queries;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -41,30 +47,32 @@ import java.util.List;
 import java.util.Set;
 
 import static org.elasticsearch.index.query.QueryBuilders.boolQuery;
-import static org.elasticsearch.xpack.ql.execution.search.QlSourceBuilder.SWITCH_TO_FIELDS_API_VERSION;
+import static org.elasticsearch.xpack.ql.execution.search.extractor.AbstractFieldHitExtractor.MultiValueSupport.FULL;
+import static org.elasticsearch.xpack.ql.util.Queries.Clause.FILTER;
 
 public final class RuntimeUtils {
 
     static final Logger QUERY_LOG = LogManager.getLogger(QueryClient.class);
+    public static final Version SWITCH_TO_MULTI_VALUE_FIELDS_VERSION = Version.V_7_15_0;
 
     private RuntimeUtils() {}
 
     public static ActionListener<SearchResponse> searchLogListener(ActionListener<SearchResponse> listener, Logger log) {
-        return ActionListener.wrap(response -> {
+        return listener.delegateFailureAndWrap((delegate, response) -> {
             ShardSearchFailure[] failures = response.getShardFailures();
             if (CollectionUtils.isEmpty(failures) == false) {
-                listener.onFailure(new EqlIllegalArgumentException(failures[0].reason(), failures[0].getCause()));
+                delegate.onFailure(new EqlIllegalArgumentException(failures[0].reason(), failures[0].getCause()));
                 return;
             }
             if (log.isTraceEnabled()) {
                 logSearchResponse(response, log);
             }
-            listener.onResponse(response);
-        }, listener::onFailure);
+            delegate.onResponse(response);
+        });
     }
 
     public static ActionListener<MultiSearchResponse> multiSearchLogListener(ActionListener<MultiSearchResponse> listener, Logger log) {
-        return ActionListener.wrap(items -> {
+        return listener.delegateFailureAndWrap((delegate, items) -> {
             for (MultiSearchResponse.Item item : items) {
                 Exception failure = item.getFailure();
                 SearchResponse response = item.getResponse();
@@ -76,15 +84,15 @@ public final class RuntimeUtils {
                     }
                 }
                 if (failure != null) {
-                    listener.onFailure(failure);
+                    delegate.onFailure(failure);
                     return;
                 }
                 if (log.isTraceEnabled()) {
                     logSearchResponse(response, log);
                 }
             }
-            listener.onResponse(items);
-        }, listener::onFailure);
+            delegate.onResponse(items);
+        });
     }
 
     private static void logSearchResponse(SearchResponse response, Logger logger) {
@@ -99,10 +107,19 @@ public final class RuntimeUtils {
 
         SearchHit[] hits = response.getHits().getHits();
         int count = hits != null ? hits.length : 0;
-        logger.trace("Got search response [hits {}, {} aggregations: [{}], {} failed shards, {} skipped shards, "
-                + "{} successful shards, {} total shards, took {}, timed out [{}]]", count, aggs.size(),
-                aggsNames, response.getFailedShards(), response.getSkippedShards(), response.getSuccessfulShards(),
-                response.getTotalShards(), response.getTook(), response.isTimedOut());
+        logger.trace(
+            "Got search response [hits {}, {} aggregations: [{}], {} failed shards, {} skipped shards, "
+                + "{} successful shards, {} total shards, took {}, timed out [{}]]",
+            count,
+            aggs.size(),
+            aggsNames,
+            response.getFailedShards(),
+            response.getSkippedShards(),
+            response.getSuccessfulShards(),
+            response.getTotalShards(),
+            response.getTook(),
+            response.isTimedOut()
+        );
     }
 
     public static List<HitExtractor> createExtractor(List<FieldExtraction> fields, EqlConfiguration cfg) {
@@ -114,14 +131,24 @@ public final class RuntimeUtils {
         return extractors;
     }
 
+    public static BucketExtractor createBucketExtractor(FieldExtraction ref) {
+        if (ref instanceof CompositeAggRef aggRef) {
+            return new CompositeKeyExtractor(aggRef.key(), false);
+        } else if (ref instanceof ComputedRef computedRef) {
+            Pipe proc = computedRef.processor();
+            String hitName = Expressions.name(proc.expression());
+            return new ComputingExtractor(proc.asProcessor(), hitName);
+        }
+        throw new EqlIllegalArgumentException("Unexpected value reference {}", ref.getClass());
+    }
+
     public static HitExtractor createExtractor(FieldExtraction ref, EqlConfiguration cfg) {
-        if (ref instanceof SearchHitFieldRef) {
-            SearchHitFieldRef f = (SearchHitFieldRef) ref;
-            return new FieldHitExtractor(f.name(), f.getDataType(), cfg.zoneId(), f.hitName(), false);
+        if (ref instanceof SearchHitFieldRef f) {
+            return new FieldHitExtractor(f.name(), f.getDataType(), cfg.zoneId(), f.hitName(), FULL);
         }
 
-        if (ref instanceof ComputedRef) {
-            Pipe proc = ((ComputedRef) ref).processor();
+        if (ref instanceof ComputedRef computedRef) {
+            Pipe proc = computedRef.processor();
             // collect hitNames
             Set<String> hitNames = new LinkedHashSet<>();
             proc = proc.transformDown(ReferenceInput.class, l -> {
@@ -144,16 +171,14 @@ public final class RuntimeUtils {
         throw new EqlIllegalArgumentException("Unexpected value reference {}", ref.getClass());
     }
 
-
-    public static SearchRequest prepareRequest(SearchSourceBuilder source,
-                                               boolean includeFrozen,
-                                               String... indices) {
-        SearchRequest searchRequest = new SearchRequest(SWITCH_TO_FIELDS_API_VERSION);
+    public static SearchRequest prepareRequest(SearchSourceBuilder source, boolean includeFrozen, String... indices) {
+        SearchRequest searchRequest = new SearchRequest(SWITCH_TO_MULTI_VALUE_FIELDS_VERSION);
         searchRequest.indices(indices);
         searchRequest.source(source);
         searchRequest.allowPartialSearchResults(false);
         searchRequest.indicesOptions(
-            includeFrozen ? IndexResolver.FIELD_CAPS_FROZEN_INDICES_OPTIONS : IndexResolver.FIELD_CAPS_INDICES_OPTIONS);
+            includeFrozen ? IndexResolver.FIELD_CAPS_FROZEN_INDICES_OPTIONS : IndexResolver.FIELD_CAPS_INDICES_OPTIONS
+        );
         return searchRequest;
     }
 
@@ -161,60 +186,48 @@ public final class RuntimeUtils {
         return Arrays.asList(response.getHits().getHits());
     }
 
-    // optimized method that adds filter to existing bool queries without additional wrapping
-    // additionally checks whether the given query exists for safe decoration
-    public static SearchSourceBuilder addFilter(QueryBuilder filter, SearchSourceBuilder source) {
-        BoolQueryBuilder bool = null;
+    /**
+     * optimized method that adds filter to existing bool queries without additional wrapping
+     * additionally checks whether the given query exists for safe decoration
+     */
+    public static SearchSourceBuilder combineFilters(SearchSourceBuilder source, QueryBuilder filter) {
+        var query = Queries.combine(FILTER, Arrays.asList(source.query(), filter));
+        query = query == null ? boolQuery() : query;
+        return source.query(query);
+    }
+
+    public static SearchSourceBuilder replaceFilter(
+        SearchSourceBuilder source,
+        List<QueryBuilder> oldFilters,
+        List<QueryBuilder> newFilters
+    ) {
+        var query = source.query();
+        query = removeFilters(query, oldFilters);
+        query = Queries.combine(
+            FILTER,
+            org.elasticsearch.xpack.ql.util.CollectionUtils.combine(Collections.singletonList(query), newFilters)
+        );
+        query = query == null ? boolQuery() : query;
+        return source.query(query);
+    }
+
+    public static SearchSourceBuilder wrapAsFilter(SearchSourceBuilder source) {
         QueryBuilder query = source.query();
-
-        if (query instanceof BoolQueryBuilder) {
-            bool = (BoolQueryBuilder) query;
-            if (filter != null && bool.filter().contains(filter) == false) {
-                bool.filter(filter);
-            }
+        BoolQueryBuilder bool = boolQuery();
+        if (query != null) {
+            bool.filter(query);
         }
-        else {
-            bool = boolQuery();
-            if (query != null) {
-                bool.filter(query);
-            }
-            if (filter != null) {
-                bool.filter(filter);
-            }
 
-            source.query(bool);
-        }
+        source.query(bool);
         return source;
     }
 
-    public static SearchSourceBuilder replaceFilter(List<QueryBuilder> oldFilters,
-                                                    List<QueryBuilder> newFilters,
-                                                    SearchSourceBuilder source) {
-        BoolQueryBuilder bool = null;
-        QueryBuilder query = source.query();
-
-        if (query instanceof BoolQueryBuilder) {
-            bool = (BoolQueryBuilder) query;
-            if (oldFilters != null) {
-                bool.filter().removeAll(oldFilters);
-            }
-
-            if (newFilters != null) {
-                bool.filter().addAll(newFilters);
+    public static QueryBuilder removeFilters(QueryBuilder query, List<QueryBuilder> filters) {
+        if (query instanceof BoolQueryBuilder boolQueryBuilder) {
+            if (org.elasticsearch.xpack.ql.util.CollectionUtils.isEmpty(filters) == false) {
+                boolQueryBuilder.filter().removeAll(filters);
             }
         }
-        // no bool query means no old filters
-        else {
-            bool = boolQuery();
-            if (query != null) {
-                bool.filter(query);
-            }
-            if (newFilters != null) {
-                bool.filter().addAll(newFilters);
-            }
-
-            source.query(bool);
-        }
-        return source;
+        return query;
     }
 }

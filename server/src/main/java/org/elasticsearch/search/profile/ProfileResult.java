@@ -8,16 +8,17 @@
 
 package org.elasticsearch.search.profile;
 
-import org.elasticsearch.Version;
-import org.elasticsearch.common.ParseField;
+import org.elasticsearch.TransportVersion;
+import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.io.stream.Writeable;
-import org.elasticsearch.common.unit.TimeValue;
-import org.elasticsearch.common.xcontent.InstantiatingObjectParser;
-import org.elasticsearch.common.xcontent.ToXContentObject;
-import org.elasticsearch.common.xcontent.XContentBuilder;
-import org.elasticsearch.common.xcontent.XContentParser;
+import org.elasticsearch.core.TimeValue;
+import org.elasticsearch.xcontent.InstantiatingObjectParser;
+import org.elasticsearch.xcontent.ParseField;
+import org.elasticsearch.xcontent.ToXContentObject;
+import org.elasticsearch.xcontent.XContentBuilder;
+import org.elasticsearch.xcontent.XContentParser;
 
 import java.io.IOException;
 import java.util.Collections;
@@ -26,17 +27,13 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
-import static org.elasticsearch.common.xcontent.ConstructingObjectParser.constructorArg;
-import static org.elasticsearch.common.xcontent.ConstructingObjectParser.optionalConstructorArg;
+import static java.util.stream.Collectors.toMap;
+import static org.elasticsearch.xcontent.ConstructingObjectParser.constructorArg;
+import static org.elasticsearch.xcontent.ConstructingObjectParser.optionalConstructorArg;
 
 /**
- * This class is the internal representation of a profiled Query, corresponding
- * to a single node in the query tree.  It is built after the query has finished executing
- * and is merely a structured representation, rather than the entity that collects the timing
- * profile (see InternalProfiler for that)
- * <p>
- * Each InternalProfileResult has a List of InternalProfileResults, which will contain
- * "children" queries if applicable
+ * The result of a profiled *thing*, like a query or an aggregation. See
+ * {@link AbstractProfiler} for the statistic collection framework.
  */
 public final class ProfileResult implements Writeable, ToXContentObject {
     static final ParseField TYPE = new ParseField("type");
@@ -54,8 +51,14 @@ public final class ProfileResult implements Writeable, ToXContentObject {
     private final long nodeTime;
     private final List<ProfileResult> children;
 
-    public ProfileResult(String type, String description, Map<String, Long> breakdown, Map<String, Object> debug,
-            long nodeTime, List<ProfileResult> children) {
+    public ProfileResult(
+        String type,
+        String description,
+        Map<String, Long> breakdown,
+        Map<String, Object> debug,
+        long nodeTime,
+        List<ProfileResult> children
+    ) {
         this.type = type;
         this.description = description;
         this.breakdown = Objects.requireNonNull(breakdown, "required breakdown argument missing");
@@ -67,13 +70,13 @@ public final class ProfileResult implements Writeable, ToXContentObject {
     /**
      * Read from a stream.
      */
-    public ProfileResult(StreamInput in) throws IOException{
+    public ProfileResult(StreamInput in) throws IOException {
         this.type = in.readString();
         this.description = in.readString();
         this.nodeTime = in.readLong();
-        breakdown = in.readMap(StreamInput::readString, StreamInput::readLong);
-        if (in.getVersion().onOrAfter(Version.V_7_9_0)) {
-            debug = in.readMap(StreamInput::readString, StreamInput::readGenericValue);
+        breakdown = in.readMap(StreamInput::readLong);
+        if (in.getTransportVersion().onOrAfter(TransportVersion.V_7_9_0)) {
+            debug = in.readMap(StreamInput::readGenericValue);
         } else {
             debug = Map.of();
         }
@@ -86,10 +89,10 @@ public final class ProfileResult implements Writeable, ToXContentObject {
         out.writeString(description);
         out.writeLong(nodeTime);            // not Vlong because can be negative
         out.writeMap(breakdown, StreamOutput::writeString, StreamOutput::writeLong);
-        if (out.getVersion().onOrAfter(Version.V_7_9_0)) {
+        if (out.getTransportVersion().onOrAfter(TransportVersion.V_7_9_0)) {
             out.writeMap(debug, StreamOutput::writeString, StreamOutput::writeGenericValue);
         }
-        out.writeList(children);
+        out.writeCollection(children);
     }
 
     /**
@@ -161,18 +164,50 @@ public final class ProfileResult implements Writeable, ToXContentObject {
         return builder.endObject();
     }
 
+    @Override
+    public boolean equals(Object obj) {
+        if (obj == null || getClass() != obj.getClass()) {
+            return false;
+        }
+        ProfileResult other = (ProfileResult) obj;
+        return type.equals(other.type)
+            && description.equals(other.description)
+            && breakdown.equals(other.breakdown)
+            && debug.equals(other.debug)
+            && nodeTime == other.nodeTime
+            && children.equals(other.children);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(type, description, breakdown, debug, nodeTime, children);
+    }
+
+    @Override
+    public String toString() {
+        return Strings.toString(this);
+    }
+
     private static final InstantiatingObjectParser<ProfileResult, Void> PARSER;
     static {
-        InstantiatingObjectParser.Builder<ProfileResult, Void> parser =
-                InstantiatingObjectParser.builder("profile_result", true, ProfileResult.class);
+        InstantiatingObjectParser.Builder<ProfileResult, Void> parser = InstantiatingObjectParser.builder(
+            "profile_result",
+            true,
+            ProfileResult.class
+        );
         parser.declareString(constructorArg(), TYPE);
         parser.declareString(constructorArg(), DESCRIPTION);
-        parser.declareObject(constructorArg(), (p, c) -> p.map(), BREAKDOWN);
+        parser.declareObject(
+            constructorArg(),
+            (p, c) -> p.map().entrySet().stream().collect(toMap(Map.Entry::getKey, e -> ((Number) e.getValue()).longValue())),
+            BREAKDOWN
+        );
         parser.declareObject(optionalConstructorArg(), (p, c) -> p.map(), DEBUG);
         parser.declareLong(constructorArg(), NODE_TIME_RAW);
         parser.declareObjectArray(optionalConstructorArg(), (p, c) -> fromXContent(p), CHILDREN);
         PARSER = parser.build();
     }
+
     public static ProfileResult fromXContent(XContentParser p) throws IOException {
         return PARSER.parse(p, null);
     }

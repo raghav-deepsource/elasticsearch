@@ -13,17 +13,25 @@ import org.elasticsearch.search.aggregations.Aggregator;
 import org.elasticsearch.search.aggregations.InternalAggregation;
 import org.elasticsearch.search.aggregations.metrics.InternalHDRPercentiles;
 import org.elasticsearch.search.aggregations.support.AggregationContext;
-import org.elasticsearch.search.aggregations.support.ValuesSource;
+import org.elasticsearch.search.aggregations.support.ValuesSourceConfig;
 
 import java.io.IOException;
 import java.util.Map;
 
 public class HistoBackedHDRPercentilesAggregator extends AbstractHistoBackedHDRPercentilesAggregator {
 
-    public HistoBackedHDRPercentilesAggregator(String name, ValuesSource valuesSource, AggregationContext context, Aggregator parent,
-                             double[] percents, int numberOfSignificantValueDigits, boolean keyed, DocValueFormat formatter,
-                             Map<String, Object> metadata) throws IOException {
-        super(name, valuesSource, context, parent, percents, numberOfSignificantValueDigits, keyed, formatter, metadata);
+    public HistoBackedHDRPercentilesAggregator(
+        String name,
+        ValuesSourceConfig config,
+        AggregationContext context,
+        Aggregator parent,
+        double[] percents,
+        int numberOfSignificantValueDigits,
+        boolean keyed,
+        DocValueFormat formatter,
+        Map<String, Object> metadata
+    ) throws IOException {
+        super(name, config, context, parent, percents, numberOfSignificantValueDigits, keyed, formatter, metadata);
     }
 
     @Override

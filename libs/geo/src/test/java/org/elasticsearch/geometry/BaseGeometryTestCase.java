@@ -9,7 +9,7 @@
 package org.elasticsearch.geometry;
 
 import org.elasticsearch.ElasticsearchException;
-import org.elasticsearch.Version;
+import org.elasticsearch.TransportVersion;
 import org.elasticsearch.geometry.utils.GeographyValidator;
 import org.elasticsearch.geometry.utils.WellKnownText;
 import org.elasticsearch.test.AbstractWireTestCase;
@@ -32,11 +32,10 @@ abstract class BaseGeometryTestCase<T extends Geometry> extends AbstractWireTest
 
     @SuppressWarnings("unchecked")
     @Override
-    protected T copyInstance(T instance, Version version) throws IOException {
-        WellKnownText wkt = new WellKnownText(true, new GeographyValidator(true));
-        String text = wkt.toWKT(instance);
+    protected T copyInstance(T instance, TransportVersion version) throws IOException {
+        String text = WellKnownText.toWKT(instance);
         try {
-            return (T) wkt.fromWKT(text);
+            return (T) WellKnownText.fromWKT(GeographyValidator.instance(true), true, text);
         } catch (ParseException e) {
             throw new ElasticsearchException(e);
         }
@@ -63,7 +62,8 @@ abstract class BaseGeometryTestCase<T extends Geometry> extends AbstractWireTest
 
             @Override
             public Object visit(GeometryCollection<?> collection) {
-                return verify(collection, "GeometryCollection");            }
+                return verify(collection, "GeometryCollection");
+            }
 
             @Override
             public Object visit(Line line) {

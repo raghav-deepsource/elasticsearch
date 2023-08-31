@@ -9,17 +9,19 @@
 package org.elasticsearch.action.admin.cluster.settings;
 
 import org.elasticsearch.action.support.master.AcknowledgedRequestBuilder;
-import org.elasticsearch.client.ElasticsearchClient;
+import org.elasticsearch.client.internal.ElasticsearchClient;
 import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.common.xcontent.XContentType;
+import org.elasticsearch.xcontent.XContentType;
 
 import java.util.Map;
 
 /**
  * Builder for a cluster update settings request
  */
-public class ClusterUpdateSettingsRequestBuilder extends AcknowledgedRequestBuilder<ClusterUpdateSettingsRequest,
-        ClusterUpdateSettingsResponse, ClusterUpdateSettingsRequestBuilder> {
+public class ClusterUpdateSettingsRequestBuilder extends AcknowledgedRequestBuilder<
+    ClusterUpdateSettingsRequest,
+    ClusterUpdateSettingsResponse,
+    ClusterUpdateSettingsRequestBuilder> {
 
     public ClusterUpdateSettingsRequestBuilder(ElasticsearchClient client, ClusterUpdateSettingsAction action) {
         super(client, action, new ClusterUpdateSettingsRequest());
@@ -27,7 +29,10 @@ public class ClusterUpdateSettingsRequestBuilder extends AcknowledgedRequestBuil
 
     /**
      * Sets the transient settings to be updated. They will not survive a full cluster restart
+     * @deprecated Transient settings are in the process of being removed. Use
+     * persistent settings to update your cluster settings instead.
      */
+    @Deprecated
     public ClusterUpdateSettingsRequestBuilder setTransientSettings(Settings settings) {
         request.transientSettings(settings);
         return this;
@@ -35,17 +40,12 @@ public class ClusterUpdateSettingsRequestBuilder extends AcknowledgedRequestBuil
 
     /**
      * Sets the transient settings to be updated. They will not survive a full cluster restart
+     * @deprecated Transient settings are in the process of being removed. Use
+     * persistent settings to update your cluster settings instead.
      */
+    @Deprecated
     public ClusterUpdateSettingsRequestBuilder setTransientSettings(Settings.Builder settings) {
         request.transientSettings(settings);
-        return this;
-    }
-
-    /**
-     * Sets the source containing the transient settings to be updated. They will not survive a full cluster restart
-     */
-    public ClusterUpdateSettingsRequestBuilder setTransientSettings(String settings, XContentType xContentType) {
-        request.transientSettings(settings, xContentType);
         return this;
     }
 

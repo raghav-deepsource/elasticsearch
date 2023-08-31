@@ -6,22 +6,22 @@
  */
 package org.elasticsearch.xpack.analytics.action;
 
-import org.elasticsearch.Version;
 import org.elasticsearch.action.support.ActionFilters;
 import org.elasticsearch.cluster.ClusterName;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.metadata.Metadata;
 import org.elasticsearch.cluster.node.DiscoveryNode;
+import org.elasticsearch.cluster.node.DiscoveryNodeUtils;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.bytes.BytesReference;
-import org.elasticsearch.common.xcontent.ContextParser;
-import org.elasticsearch.common.xcontent.ToXContent;
-import org.elasticsearch.common.xcontent.XContentBuilder;
-import org.elasticsearch.common.xcontent.json.JsonXContent;
 import org.elasticsearch.test.ESTestCase;
-import org.elasticsearch.test.rest.yaml.ObjectPath;
+import org.elasticsearch.test.rest.ObjectPath;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.TransportService;
+import org.elasticsearch.xcontent.ContextParser;
+import org.elasticsearch.xcontent.ToXContent;
+import org.elasticsearch.xcontent.XContentBuilder;
+import org.elasticsearch.xcontent.json.JsonXContent;
 import org.elasticsearch.xpack.analytics.AnalyticsUsage;
 import org.elasticsearch.xpack.core.analytics.AnalyticsFeatureSetUsage;
 import org.elasticsearch.xpack.core.analytics.action.AnalyticsStatsAction;
@@ -34,7 +34,7 @@ import java.util.Locale;
 
 import static java.util.Collections.emptyList;
 import static java.util.stream.Collectors.toList;
-import static org.elasticsearch.common.xcontent.XContentFactory.jsonBuilder;
+import static org.elasticsearch.xcontent.XContentFactory.jsonBuilder;
 import static org.hamcrest.Matchers.equalTo;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -45,18 +45,22 @@ public class TransportAnalyticsStatsActionTests extends ESTestCase {
         ThreadPool threadPool = mock(ThreadPool.class);
 
         ClusterService clusterService = mock(ClusterService.class);
-        DiscoveryNode discoveryNode = new DiscoveryNode("nodeId", buildNewFakeTransportAddress(), Version.CURRENT);
+        DiscoveryNode discoveryNode = DiscoveryNodeUtils.create("nodeId");
         when(clusterService.localNode()).thenReturn(discoveryNode);
         ClusterName clusterName = new ClusterName("cluster_name");
         when(clusterService.getClusterName()).thenReturn(clusterName);
-
 
         ClusterState clusterState = mock(ClusterState.class);
         when(clusterState.getMetadata()).thenReturn(Metadata.EMPTY_METADATA);
         when(clusterService.state()).thenReturn(clusterState);
 
-        return new TransportAnalyticsStatsAction(transportService, clusterService, threadPool,
-                new ActionFilters(Collections.emptySet()), usage);
+        return new TransportAnalyticsStatsAction(
+            transportService,
+            clusterService,
+            threadPool,
+            new ActionFilters(Collections.emptySet()),
+            usage
+        );
     }
 
     public void test() throws IOException {
@@ -78,10 +82,13 @@ public class TransportAnalyticsStatsActionTests extends ESTestCase {
     private ObjectPath run(AnalyticsUsage... nodeUsages) throws IOException {
         AnalyticsStatsAction.Request request = new AnalyticsStatsAction.Request();
         List<AnalyticsStatsAction.NodeResponse> nodeResponses = Arrays.stream(nodeUsages)
-                .map(usage -> action(usage).nodeOperation(new AnalyticsStatsAction.NodeRequest(request), null))
-                .collect(toList());
+            .map(usage -> action(usage).nodeOperation(new AnalyticsStatsAction.NodeRequest(request), null))
+            .collect(toList());
         AnalyticsStatsAction.Response response = new AnalyticsStatsAction.Response(
-                new ClusterName("cluster_name"), nodeResponses, emptyList());
+            new ClusterName("cluster_name"),
+            nodeResponses,
+            emptyList()
+        );
 
         AnalyticsFeatureSetUsage usage = new AnalyticsFeatureSetUsage(true, true, response);
         try (XContentBuilder builder = jsonBuilder()) {

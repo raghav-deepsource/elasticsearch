@@ -8,7 +8,7 @@
 
 package org.elasticsearch.index.rankeval;
 
-import org.elasticsearch.Version;
+import org.elasticsearch.TransportVersion;
 import org.elasticsearch.action.ActionRequest;
 import org.elasticsearch.action.ActionRequestValidationException;
 import org.elasticsearch.action.IndicesRequest;
@@ -30,7 +30,7 @@ public class RankEvalRequest extends ActionRequest implements IndicesRequest.Rep
 
     private RankEvalSpec rankingEvaluationSpec;
 
-    private IndicesOptions indicesOptions  = SearchRequest.DEFAULT_INDICES_OPTIONS;
+    private IndicesOptions indicesOptions = SearchRequest.DEFAULT_INDICES_OPTIONS;
     private String[] indices = Strings.EMPTY_ARRAY;
 
     private SearchType searchType = SearchType.DEFAULT;
@@ -45,13 +45,12 @@ public class RankEvalRequest extends ActionRequest implements IndicesRequest.Rep
         rankingEvaluationSpec = new RankEvalSpec(in);
         indices = in.readStringArray();
         indicesOptions = IndicesOptions.readIndicesOptions(in);
-        if (in.getVersion().onOrAfter(Version.V_7_6_0)) {
+        if (in.getTransportVersion().onOrAfter(TransportVersion.V_7_6_0)) {
             searchType = SearchType.fromId(in.readByte());
         }
     }
 
-    RankEvalRequest() {
-    }
+    RankEvalRequest() {}
 
     @Override
     public ActionRequestValidationException validate() {
@@ -127,7 +126,7 @@ public class RankEvalRequest extends ActionRequest implements IndicesRequest.Rep
         rankingEvaluationSpec.writeTo(out);
         out.writeStringArray(indices);
         indicesOptions.writeIndicesOptions(out);
-        if (out.getVersion().onOrAfter(Version.V_7_6_0)) {
+        if (out.getTransportVersion().onOrAfter(TransportVersion.V_7_6_0)) {
             out.writeByte(searchType.id());
         }
     }
@@ -141,10 +140,10 @@ public class RankEvalRequest extends ActionRequest implements IndicesRequest.Rep
             return false;
         }
         RankEvalRequest that = (RankEvalRequest) o;
-        return Objects.equals(indicesOptions, that.indicesOptions) &&
-                Arrays.equals(indices, that.indices) &&
-                Objects.equals(rankingEvaluationSpec, that.rankingEvaluationSpec) &&
-                Objects.equals(searchType, that.searchType);
+        return Objects.equals(indicesOptions, that.indicesOptions)
+            && Arrays.equals(indices, that.indices)
+            && Objects.equals(rankingEvaluationSpec, that.rankingEvaluationSpec)
+            && Objects.equals(searchType, that.searchType);
     }
 
     @Override

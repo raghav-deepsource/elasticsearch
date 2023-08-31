@@ -8,15 +8,16 @@
 
 package org.elasticsearch.action.admin.cluster.snapshots.status;
 
+import org.elasticsearch.common.io.stream.Writeable;
+import org.elasticsearch.test.AbstractChunkedSerializingTestCase;
+import org.elasticsearch.xcontent.XContentParser;
+
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Predicate;
 
-import org.elasticsearch.common.xcontent.XContentParser;
-import org.elasticsearch.test.AbstractXContentTestCase;
-
-public class SnapshotsStatusResponseTests extends AbstractXContentTestCase<SnapshotsStatusResponse> {
+public class SnapshotsStatusResponseTests extends AbstractChunkedSerializingTestCase<SnapshotsStatusResponse> {
 
     @Override
     protected SnapshotsStatusResponse doParseInstance(XContentParser parser) throws IOException {
@@ -42,5 +43,22 @@ public class SnapshotsStatusResponseTests extends AbstractXContentTestCase<Snaps
             snapshotStatuses.add(statusBuilder.createTestInstance());
         }
         return new SnapshotsStatusResponse(snapshotStatuses);
+    }
+
+    @Override
+    protected SnapshotsStatusResponse mutateInstance(SnapshotsStatusResponse instance) {
+        return null;// TODO implement https://github.com/elastic/elasticsearch/issues/25929
+    }
+
+    @Override
+    protected Writeable.Reader<SnapshotsStatusResponse> instanceReader() {
+        return SnapshotsStatusResponse::new;
+    }
+
+    public void testChunking() {
+        AbstractChunkedSerializingTestCase.assertChunkCount(
+            createTestInstance(),
+            instance -> 2 + instance.getSnapshots().stream().mapToInt(i -> 2 + i.getIndices().size()).sum()
+        );
     }
 }

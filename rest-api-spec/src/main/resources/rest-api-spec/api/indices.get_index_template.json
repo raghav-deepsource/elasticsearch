@@ -24,8 +24,8 @@
           ],
           "parts":{
             "name":{
-              "type":"list",
-              "description":"The comma separated names of the index templates"
+              "type":"string",
+              "description":"A pattern that returned template names must match"
             }
           }
         }
@@ -43,6 +43,10 @@
       "local":{
         "type":"boolean",
         "description":"Return local information, do not retrieve the state from master node (default: false)"
+      },
+      "include_defaults":{
+        "type":"boolean",
+        "description":"Return all relevant default configurations for the index template (default: false)"
       }
     }
   }

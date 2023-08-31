@@ -9,7 +9,6 @@
 package org.elasticsearch.search.aggregations.bucket.geogrid;
 
 import org.elasticsearch.common.geo.GeoBoundingBox;
-import org.elasticsearch.geometry.utils.Geohash;
 import org.elasticsearch.search.aggregations.Aggregator;
 import org.elasticsearch.search.aggregations.AggregatorFactories;
 import org.elasticsearch.search.aggregations.AggregatorFactory;
@@ -37,11 +36,19 @@ public class GeoHashGridAggregatorFactory extends ValuesSourceAggregatorFactory 
     private final int shardSize;
     private final GeoBoundingBox geoBoundingBox;
 
-    GeoHashGridAggregatorFactory(String name, ValuesSourceConfig config, int precision, int requiredSize,
-                                 int shardSize, GeoBoundingBox geoBoundingBox, AggregationContext context,
-                                 AggregatorFactory parent, AggregatorFactories.Builder subFactoriesBuilder,
-                                 Map<String, Object> metadata,
-                                 GeoGridAggregatorSupplier aggregatorSupplier) throws IOException {
+    GeoHashGridAggregatorFactory(
+        String name,
+        ValuesSourceConfig config,
+        int precision,
+        int requiredSize,
+        int shardSize,
+        GeoBoundingBox geoBoundingBox,
+        AggregationContext context,
+        AggregatorFactory parent,
+        AggregatorFactories.Builder subFactoriesBuilder,
+        Map<String, Object> metadata,
+        GeoGridAggregatorSupplier aggregatorSupplier
+    ) throws IOException {
         super(name, config, context, parent, subFactoriesBuilder, metadata);
 
         this.aggregatorSupplier = aggregatorSupplier;
@@ -63,23 +70,21 @@ public class GeoHashGridAggregatorFactory extends ValuesSourceAggregatorFactory 
     }
 
     @Override
-    protected Aggregator doCreateInternal(Aggregator parent,
-                                          CardinalityUpperBound cardinality,
-                                          Map<String, Object> metadata) throws IOException {
-        return aggregatorSupplier
-            .build(
-                name,
-                factories,
-                config.getValuesSource(),
-                precision,
-                geoBoundingBox,
-                requiredSize,
-                shardSize,
-                context,
-                parent,
-                cardinality,
-                metadata
-            );
+    protected Aggregator doCreateInternal(Aggregator parent, CardinalityUpperBound cardinality, Map<String, Object> metadata)
+        throws IOException {
+        return aggregatorSupplier.build(
+            name,
+            factories,
+            config.getValuesSource(),
+            precision,
+            geoBoundingBox,
+            requiredSize,
+            shardSize,
+            context,
+            parent,
+            cardinality,
+            metadata
+        );
     }
 
     static void registerAggregators(ValuesSourceRegistry.Builder builder) {
@@ -97,25 +102,18 @@ public class GeoHashGridAggregatorFactory extends ValuesSourceAggregatorFactory 
                 context,
                 parent,
                 cardinality,
-                metadata) -> {
-                CellIdSource cellIdSource = new CellIdSource(
-                    (ValuesSource.GeoPoint) valuesSource,
-                    precision,
-                    geoBoundingBox,
-                    Geohash::longEncode
-                );
-                return new GeoHashGridAggregator(
+                metadata) -> new GeoHashGridAggregator(
                     name,
                     factories,
-                    cellIdSource,
+                    cb -> new GeoHashCellIdSource((ValuesSource.GeoPoint) valuesSource, precision, geoBoundingBox, cb),
                     requiredSize,
                     shardSize,
                     context,
                     parent,
                     cardinality,
                     metadata
-                );
-            },
-                true);
+                ),
+            true
+        );
     }
 }

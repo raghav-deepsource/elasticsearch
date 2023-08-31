@@ -8,14 +8,16 @@
 
 package org.elasticsearch.search.aggregations.metrics;
 
-import org.elasticsearch.Version;
+import org.elasticsearch.TransportVersion;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.util.CollectionUtils;
-import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.script.Script;
 import org.elasticsearch.script.ScriptedMetricAggContexts;
+import org.elasticsearch.search.aggregations.AggregationReduceContext;
 import org.elasticsearch.search.aggregations.InternalAggregation;
+import org.elasticsearch.search.aggregations.support.SamplingContext;
+import org.elasticsearch.xcontent.XContentBuilder;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -43,7 +45,7 @@ public class InternalScriptedMetric extends InternalAggregation implements Scrip
     public InternalScriptedMetric(StreamInput in) throws IOException {
         super(in);
         reduceScript = in.readOptionalWriteable(Script::new);
-        if (in.getVersion().before(Version.V_7_8_0)) {
+        if (in.getTransportVersion().before(TransportVersion.V_7_8_0)) {
             aggregations = singletonList(in.readGenericValue());
         } else {
             aggregations = in.readList(StreamInput::readGenericValue);
@@ -53,7 +55,7 @@ public class InternalScriptedMetric extends InternalAggregation implements Scrip
     @Override
     protected void doWriteTo(StreamOutput out) throws IOException {
         out.writeOptionalWriteable(reduceScript);
-        if (out.getVersion().before(Version.V_7_8_0)) {
+        if (out.getTransportVersion().before(TransportVersion.V_7_8_0)) {
             if (aggregations.size() > 1) {
                 /*
                  * If aggregations has more than one entry we're trying to
@@ -87,7 +89,7 @@ public class InternalScriptedMetric extends InternalAggregation implements Scrip
     }
 
     @Override
-    public InternalAggregation reduce(List<InternalAggregation> aggregations, ReduceContext reduceContext) {
+    public InternalAggregation reduce(List<InternalAggregation> aggregations, AggregationReduceContext reduceContext) {
         List<Object> aggregationObjects = new ArrayList<>();
         for (InternalAggregation aggregation : aggregations) {
             InternalScriptedMetric mapReduceAggregation = (InternalScriptedMetric) aggregation;
@@ -101,15 +103,15 @@ public class InternalScriptedMetric extends InternalAggregation implements Scrip
                 params.putAll(firstAggregation.reduceScript.getParams());
             }
 
-            ScriptedMetricAggContexts.ReduceScript.Factory factory = reduceContext.scriptService().compile(
-                firstAggregation.reduceScript, ScriptedMetricAggContexts.ReduceScript.CONTEXT);
+            ScriptedMetricAggContexts.ReduceScript.Factory factory = reduceContext.scriptService()
+                .compile(firstAggregation.reduceScript, ScriptedMetricAggContexts.ReduceScript.CONTEXT);
             ScriptedMetricAggContexts.ReduceScript script = factory.newInstance(params, aggregationObjects);
 
             Object scriptResult = script.execute();
             CollectionUtils.ensureNoSelfReferences(scriptResult, "reduce script");
 
             aggregation = Collections.singletonList(scriptResult);
-        } else if (reduceContext.isFinalReduce())  {
+        } else if (reduceContext.isFinalReduce()) {
             aggregation = Collections.singletonList(aggregationObjects);
         } else {
             // if we are not an final reduce we have to maintain all the aggs from all the incoming one
@@ -117,6 +119,11 @@ public class InternalScriptedMetric extends InternalAggregation implements Scrip
             aggregation = aggregationObjects;
         }
         return new InternalScriptedMetric(firstAggregation.getName(), aggregation, firstAggregation.reduceScript, getMetadata());
+    }
+
+    @Override
+    public InternalAggregation finalizeSampling(SamplingContext samplingContext) {
+        return this;
     }
 
     @Override
@@ -147,8 +154,7 @@ public class InternalScriptedMetric extends InternalAggregation implements Scrip
         if (super.equals(obj) == false) return false;
 
         InternalScriptedMetric other = (InternalScriptedMetric) obj;
-        return Objects.equals(reduceScript, other.reduceScript) &&
-                Objects.equals(aggregations, other.aggregations);
+        return Objects.equals(reduceScript, other.reduceScript) && Objects.equals(aggregations, other.aggregations);
     }
 
     @Override
@@ -156,4 +162,8 @@ public class InternalScriptedMetric extends InternalAggregation implements Scrip
         return Objects.hash(super.hashCode(), reduceScript, aggregations);
     }
 
+    @Override
+    public String toString() {
+        return "InternalScriptedMetric{" + reduceScript + "}";
+    }
 }

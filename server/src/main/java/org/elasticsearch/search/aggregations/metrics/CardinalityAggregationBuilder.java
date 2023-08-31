@@ -8,29 +8,28 @@
 
 package org.elasticsearch.search.aggregations.metrics;
 
-import org.elasticsearch.Version;
-import org.elasticsearch.common.ParseField;
+import org.elasticsearch.TransportVersion;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
-import org.elasticsearch.common.xcontent.ObjectParser;
-import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.search.aggregations.AggregationBuilder;
 import org.elasticsearch.search.aggregations.AggregatorFactories;
 import org.elasticsearch.search.aggregations.AggregatorFactory;
 import org.elasticsearch.search.aggregations.support.AggregationContext;
 import org.elasticsearch.search.aggregations.support.CoreValuesSourceType;
-import org.elasticsearch.search.aggregations.support.ValuesSource;
 import org.elasticsearch.search.aggregations.support.ValuesSourceAggregationBuilder;
 import org.elasticsearch.search.aggregations.support.ValuesSourceConfig;
 import org.elasticsearch.search.aggregations.support.ValuesSourceRegistry;
 import org.elasticsearch.search.aggregations.support.ValuesSourceType;
+import org.elasticsearch.xcontent.ObjectParser;
+import org.elasticsearch.xcontent.ParseField;
+import org.elasticsearch.xcontent.XContentBuilder;
 
 import java.io.IOException;
 import java.util.Map;
 import java.util.Objects;
 
-public final class CardinalityAggregationBuilder
-    extends ValuesSourceAggregationBuilder.LeafOnly<ValuesSource, CardinalityAggregationBuilder> {
+public final class CardinalityAggregationBuilder extends ValuesSourceAggregationBuilder.SingleMetricAggregationBuilder<
+    CardinalityAggregationBuilder> {
 
     public static final String NAME = "cardinality";
     public static final ValuesSourceRegistry.RegistryKey<CardinalityAggregatorSupplier> REGISTRY_KEY =
@@ -38,13 +37,17 @@ public final class CardinalityAggregationBuilder
 
     private static final ParseField REHASH = new ParseField("rehash").withAllDeprecated("no replacement - values will always be rehashed");
     public static final ParseField PRECISION_THRESHOLD_FIELD = new ParseField("precision_threshold");
+    public static final ParseField EXECUTION_HINT_FIELD_NAME = new ParseField("execution_hint");
 
-    public static final ObjectParser<CardinalityAggregationBuilder, String> PARSER =
-            ObjectParser.fromBuilder(NAME, CardinalityAggregationBuilder::new);
+    public static final ObjectParser<CardinalityAggregationBuilder, String> PARSER = ObjectParser.fromBuilder(
+        NAME,
+        CardinalityAggregationBuilder::new
+    );
     static {
         ValuesSourceAggregationBuilder.declareFields(PARSER, true, false, false);
         PARSER.declareLong(CardinalityAggregationBuilder::precisionThreshold, CardinalityAggregationBuilder.PRECISION_THRESHOLD_FIELD);
         PARSER.declareLong((b, v) -> {/*ignore*/}, REHASH);
+        PARSER.declareString(CardinalityAggregationBuilder::executionHint, EXECUTION_HINT_FIELD_NAME);
     }
 
     public static void registerAggregators(ValuesSourceRegistry.Builder builder) {
@@ -53,15 +56,20 @@ public final class CardinalityAggregationBuilder
 
     private Long precisionThreshold = null;
 
+    private String executionHint = null;
+
     public CardinalityAggregationBuilder(String name) {
         super(name);
     }
 
-    public CardinalityAggregationBuilder(CardinalityAggregationBuilder clone,
-                                         AggregatorFactories.Builder factoriesBuilder,
-                                         Map<String, Object> metadata) {
+    public CardinalityAggregationBuilder(
+        CardinalityAggregationBuilder clone,
+        AggregatorFactories.Builder factoriesBuilder,
+        Map<String, Object> metadata
+    ) {
         super(clone, factoriesBuilder, metadata);
         this.precisionThreshold = clone.precisionThreshold;
+        this.executionHint = clone.executionHint;
     }
 
     @Override
@@ -77,6 +85,9 @@ public final class CardinalityAggregationBuilder
         if (in.readBoolean()) {
             precisionThreshold = in.readLong();
         }
+        if (in.getTransportVersion().onOrAfter(TransportVersion.V_8_4_0)) {
+            executionHint = in.readOptionalString();
+        }
     }
 
     @Override
@@ -91,10 +102,23 @@ public final class CardinalityAggregationBuilder
         if (hasPrecisionThreshold) {
             out.writeLong(precisionThreshold);
         }
+        if (out.getTransportVersion().onOrAfter(TransportVersion.V_8_4_0)) {
+            out.writeOptionalString(executionHint);
+        }
     }
 
     @Override
-    protected boolean serializeTargetValueType(Version version) {
+    public boolean supportsSampling() {
+        return true;
+    }
+
+    @Override
+    public boolean supportsParallelCollection() {
+        return false;
+    }
+
+    @Override
+    protected boolean serializeTargetValueType(TransportVersion version) {
         return true;
     }
 
@@ -105,7 +129,8 @@ public final class CardinalityAggregationBuilder
     public CardinalityAggregationBuilder precisionThreshold(long precisionThreshold) {
         if (precisionThreshold < 0) {
             throw new IllegalArgumentException(
-                    "[precisionThreshold] must be greater than or equal to 0. Found [" + precisionThreshold + "] in [" + name + "]");
+                "[precisionThreshold] must be greater than or equal to 0. Found [" + precisionThreshold + "] in [" + name + "]"
+            );
         }
         this.precisionThreshold = precisionThreshold;
         return this;
@@ -120,15 +145,46 @@ public final class CardinalityAggregationBuilder
         return precisionThreshold;
     }
 
-    @Override
-    protected CardinalityAggregatorFactory innerBuild(AggregationContext context, ValuesSourceConfig config,
-                                                      AggregatorFactory parent,
-                                                      AggregatorFactories.Builder subFactoriesBuilder) throws IOException {
-        CardinalityAggregatorSupplier aggregatorSupplier =
-            context.getValuesSourceRegistry().getAggregator(REGISTRY_KEY, config);
+    /**
+     * Get the execution hint.  This is an optional user specified hint that
+     * will be used to decide on the specific collection algorithm.  Since this
+     * is a hint, the implementation may choose to ignore it (typically when
+     * the specified method is not applicable to the given field type)
+     */
+    public String ExecutionHint() {
+        return executionHint;
+    }
 
-        return new CardinalityAggregatorFactory(name, config, precisionThreshold, context, parent,
-                                                subFactoriesBuilder, metadata, aggregatorSupplier);
+    /**
+     * Set the execution hint.  This is an optional user specified hint that
+     * will be used to decide on the specific collection algorithm.  Since this
+     * is a hint, the implementation may choose to ignore it (typically when
+     * the specified method is not applicable to the given field type)
+     */
+    public void executionHint(String executionHint) {
+        this.executionHint = executionHint;
+    }
+
+    @Override
+    protected CardinalityAggregatorFactory innerBuild(
+        AggregationContext context,
+        ValuesSourceConfig config,
+        AggregatorFactory parent,
+        AggregatorFactories.Builder subFactoriesBuilder
+    ) throws IOException {
+        CardinalityAggregatorSupplier aggregatorSupplier = context.getValuesSourceRegistry().getAggregator(REGISTRY_KEY, config);
+
+        return new CardinalityAggregatorFactory(
+            name,
+            config,
+            precisionThreshold,
+            executionHint,
+            context,
+            parent,
+            subFactoriesBuilder,
+            metadata,
+            aggregatorSupplier
+        );
     }
 
     @Override
@@ -136,12 +192,15 @@ public final class CardinalityAggregationBuilder
         if (precisionThreshold != null) {
             builder.field(PRECISION_THRESHOLD_FIELD.getPreferredName(), precisionThreshold);
         }
+        if (executionHint != null) {
+            builder.field(EXECUTION_HINT_FIELD_NAME.getPreferredName(), executionHint);
+        }
         return builder;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(super.hashCode(), precisionThreshold);
+        return Objects.hash(super.hashCode(), precisionThreshold, executionHint);
     }
 
     @Override
@@ -150,7 +209,7 @@ public final class CardinalityAggregationBuilder
         if (obj == null || getClass() != obj.getClass()) return false;
         if (super.equals(obj) == false) return false;
         CardinalityAggregationBuilder other = (CardinalityAggregationBuilder) obj;
-        return Objects.equals(precisionThreshold, other.precisionThreshold);
+        return Objects.equals(precisionThreshold, other.precisionThreshold) && Objects.equals(executionHint, other.executionHint);
     }
 
     @Override
@@ -161,5 +220,10 @@ public final class CardinalityAggregationBuilder
     @Override
     protected ValuesSourceRegistry.RegistryKey<?> getRegistryKey() {
         return REGISTRY_KEY;
+    }
+
+    @Override
+    public TransportVersion getMinimalSupportedVersion() {
+        return TransportVersion.ZERO;
     }
 }

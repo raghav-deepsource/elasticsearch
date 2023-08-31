@@ -8,17 +8,17 @@
 
 package org.elasticsearch.search.aggregations.bucket.filter;
 
-import org.elasticsearch.common.xcontent.ObjectParser;
-import org.elasticsearch.common.xcontent.XContentBuilder;
-import org.elasticsearch.common.xcontent.XContentParser;
+import org.elasticsearch.common.util.Maps;
 import org.elasticsearch.common.xcontent.XContentParserUtils;
 import org.elasticsearch.search.aggregations.Aggregation;
 import org.elasticsearch.search.aggregations.Aggregations;
 import org.elasticsearch.search.aggregations.ParsedMultiBucketAggregation;
+import org.elasticsearch.xcontent.ObjectParser;
+import org.elasticsearch.xcontent.XContentBuilder;
+import org.elasticsearch.xcontent.XContentParser;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -41,7 +41,7 @@ public class ParsedFilters extends ParsedMultiBucketAggregation<ParsedFilters.Pa
     @Override
     public ParsedBucket getBucketByKey(String key) {
         if (bucketMap == null) {
-            bucketMap = new HashMap<>(buckets.size());
+            bucketMap = Maps.newMapWithExpectedSize(buckets.size());
             for (ParsedBucket bucket : buckets) {
                 bucketMap.put(bucket.getKey(), bucket);
             }
@@ -49,12 +49,17 @@ public class ParsedFilters extends ParsedMultiBucketAggregation<ParsedFilters.Pa
         return bucketMap.get(key);
     }
 
-    private static final ObjectParser<ParsedFilters, Void> PARSER =
-            new ObjectParser<>(ParsedFilters.class.getSimpleName(), true, ParsedFilters::new);
+    private static final ObjectParser<ParsedFilters, Void> PARSER = new ObjectParser<>(
+        ParsedFilters.class.getSimpleName(),
+        true,
+        ParsedFilters::new
+    );
     static {
-        declareMultiBucketAggregationFields(PARSER,
-                parser -> ParsedBucket.fromXContent(parser, false),
-                parser -> ParsedBucket.fromXContent(parser, true));
+        declareMultiBucketAggregationFields(
+            PARSER,
+            parser -> ParsedBucket.fromXContent(parser, false),
+            parser -> ParsedBucket.fromXContent(parser, true)
+        );
     }
 
     public static ParsedFilters fromXContent(XContentParser parser, String name) throws IOException {
@@ -64,9 +69,10 @@ public class ParsedFilters extends ParsedMultiBucketAggregation<ParsedFilters.Pa
         if (aggregation.keyed == false) {
             int i = 0;
             for (ParsedBucket bucket : aggregation.buckets) {
-                assert bucket.key == null;
-                bucket.key = String.valueOf(i);
-                i++;
+                if (bucket.key == null) {
+                    bucket.key = String.valueOf(i);
+                    i++;
+                }
             }
         }
         return aggregation;
@@ -75,6 +81,8 @@ public class ParsedFilters extends ParsedMultiBucketAggregation<ParsedFilters.Pa
     public static class ParsedBucket extends ParsedMultiBucketAggregation.ParsedBucket implements Filters.Bucket {
 
         private String key;
+
+        private boolean keyedBucket = true;
 
         @Override
         public String getKey() {
@@ -93,12 +101,14 @@ public class ParsedFilters extends ParsedMultiBucketAggregation<ParsedFilters.Pa
             } else {
                 builder.startObject();
             }
+            if (isKeyed() == false && keyedBucket == false) {
+                builder.field(CommonFields.KEY.getPreferredName(), key);
+            }
             builder.field(CommonFields.DOC_COUNT.getPreferredName(), getDocCount());
             getAggregations().toXContentInternal(builder, params);
             builder.endObject();
             return builder;
         }
-
 
         static ParsedBucket fromXContent(XContentParser parser, boolean keyed) throws IOException {
             final ParsedBucket bucket = new ParsedBucket();
@@ -118,10 +128,17 @@ public class ParsedFilters extends ParsedMultiBucketAggregation<ParsedFilters.Pa
                 } else if (token.isValue()) {
                     if (CommonFields.DOC_COUNT.getPreferredName().equals(currentFieldName)) {
                         bucket.setDocCount(parser.longValue());
+                    } else if (CommonFields.KEY.getPreferredName().equals(currentFieldName)) {
+                        bucket.key = parser.text();
+                        bucket.keyedBucket = false;
                     }
                 } else if (token == XContentParser.Token.START_OBJECT) {
-                    XContentParserUtils.parseTypedKeysObject(parser, Aggregation.TYPED_KEYS_DELIMITER, Aggregation.class,
-                            aggregations::add);
+                    XContentParserUtils.parseTypedKeysObject(
+                        parser,
+                        Aggregation.TYPED_KEYS_DELIMITER,
+                        Aggregation.class,
+                        aggregations::add
+                    );
                 }
             }
             bucket.setAggregations(new Aggregations(aggregations));

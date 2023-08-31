@@ -9,24 +9,27 @@
 package org.elasticsearch.cluster.metadata;
 
 import org.elasticsearch.ElasticsearchParseException;
-import org.elasticsearch.Version;
+import org.elasticsearch.TransportVersion;
 import org.elasticsearch.cluster.AbstractNamedDiffable;
+import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.NamedDiff;
 import org.elasticsearch.cluster.metadata.Metadata.Custom;
-import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.Strings;
+import org.elasticsearch.common.collect.Iterators;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.common.xcontent.ToXContent;
-import org.elasticsearch.common.xcontent.XContentBuilder;
-import org.elasticsearch.common.xcontent.XContentParser;
+import org.elasticsearch.core.Nullable;
 import org.elasticsearch.repositories.RepositoryData;
+import org.elasticsearch.xcontent.ToXContent;
+import org.elasticsearch.xcontent.XContentBuilder;
+import org.elasticsearch.xcontent.XContentParser;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.function.UnaryOperator;
 
@@ -46,6 +49,10 @@ public class RepositoriesMetadata extends AbstractNamedDiffable<Custom> implemen
     public static final String HIDE_GENERATIONS_PARAM = "hide_generations";
 
     private final List<RepositoryMetadata> repositories;
+
+    public static RepositoriesMetadata get(ClusterState state) {
+        return state.metadata().custom(TYPE, EMPTY);
+    }
 
     /**
      * Constructs new repository metadata
@@ -166,15 +173,15 @@ public class RepositoriesMetadata extends AbstractNamedDiffable<Custom> implemen
     }
 
     @Override
-    public Version getMinimalSupportedVersion() {
-        return Version.CURRENT.minimumCompatibilityVersion();
+    public TransportVersion getMinimalSupportedVersion() {
+        return TransportVersion.MINIMUM_COMPATIBLE;
     }
 
     public RepositoriesMetadata(StreamInput in) throws IOException {
-        this.repositories = in.readList(RepositoryMetadata::new);
+        this.repositories = in.readImmutableList(RepositoryMetadata::new);
     }
 
-    public static NamedDiff<Custom> readDiffFrom(StreamInput in) throws  IOException {
+    public static NamedDiff<Custom> readDiffFrom(StreamInput in) throws IOException {
         return readDiffFrom(Custom.class, TYPE, in);
     }
 
@@ -183,7 +190,7 @@ public class RepositoriesMetadata extends AbstractNamedDiffable<Custom> implemen
      */
     @Override
     public void writeTo(StreamOutput out) throws IOException {
-        out.writeList(repositories);
+        out.writeCollection(repositories);
     }
 
     public static RepositoriesMetadata fromXContent(XContentParser parser) throws IOException {
@@ -229,8 +236,11 @@ public class RepositoriesMetadata extends AbstractNamedDiffable<Custom> implemen
                             }
                             pendingGeneration = parser.longValue();
                         } else {
-                            throw new ElasticsearchParseException("failed to parse repository [{}], unknown field [{}]",
-                                name, currentFieldName);
+                            throw new ElasticsearchParseException(
+                                "failed to parse repository [{}], unknown field [{}]",
+                                name,
+                                currentFieldName
+                            );
                         }
                     } else {
                         throw new ElasticsearchParseException("failed to parse repository [{}]", name);
@@ -247,15 +257,9 @@ public class RepositoriesMetadata extends AbstractNamedDiffable<Custom> implemen
         return new RepositoriesMetadata(repository);
     }
 
-    /**
-     * {@inheritDoc}
-     */
     @Override
-    public XContentBuilder toXContent(XContentBuilder builder, ToXContent.Params params) throws IOException {
-        for (RepositoryMetadata repository : repositories) {
-            toXContent(repository, builder, params);
-        }
-        return builder;
+    public Iterator<? extends ToXContent> toXContentChunked(ToXContent.Params ignored) {
+        return Iterators.map(repositories.iterator(), repository -> (builder, params) -> toXContent(repository, builder, params));
     }
 
     @Override
@@ -270,7 +274,8 @@ public class RepositoriesMetadata extends AbstractNamedDiffable<Custom> implemen
      * @param builder    XContent builder
      * @param params     serialization parameters
      */
-    public static void toXContent(RepositoryMetadata repository, XContentBuilder builder, ToXContent.Params params) throws IOException {
+    public static XContentBuilder toXContent(RepositoryMetadata repository, XContentBuilder builder, ToXContent.Params params)
+        throws IOException {
         builder.startObject(repository.name());
         builder.field("type", repository.type());
         if (repository.uuid().equals(RepositoryData.MISSING_UUID) == false) {
@@ -285,6 +290,7 @@ public class RepositoriesMetadata extends AbstractNamedDiffable<Custom> implemen
             builder.field("pending_generation", repository.pendingGeneration());
         }
         builder.endObject();
+        return builder;
     }
 
     @Override

@@ -54,8 +54,7 @@ public class TransportListDanglingIndicesAction extends TransportNodesAction<
             actionFilters,
             ListDanglingIndicesRequest::new,
             NodeListDanglingIndicesRequest::new,
-            ThreadPool.Names.MANAGEMENT,
-            NodeListDanglingIndicesResponse.class
+            ThreadPool.Names.MANAGEMENT
         );
         this.transportService = transportService;
         this.danglingIndicesState = danglingIndicesState;
@@ -76,7 +75,7 @@ public class TransportListDanglingIndicesAction extends TransportNodesAction<
     }
 
     @Override
-    protected NodeListDanglingIndicesResponse newNodeResponse(StreamInput in) throws IOException {
+    protected NodeListDanglingIndicesResponse newNodeResponse(StreamInput in, DiscoveryNode node) throws IOException {
         return new NodeListDanglingIndicesResponse(in);
     }
 

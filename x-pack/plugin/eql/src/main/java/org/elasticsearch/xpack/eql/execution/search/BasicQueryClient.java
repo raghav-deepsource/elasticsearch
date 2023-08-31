@@ -14,7 +14,7 @@ import org.elasticsearch.action.search.MultiSearchRequestBuilder;
 import org.elasticsearch.action.search.MultiSearchResponse;
 import org.elasticsearch.action.search.SearchRequest;
 import org.elasticsearch.action.search.SearchResponse;
-import org.elasticsearch.client.Client;
+import org.elasticsearch.client.internal.Client;
 import org.elasticsearch.index.query.IdsQueryBuilder;
 import org.elasticsearch.search.SearchHit;
 import org.elasticsearch.search.builder.SearchSourceBuilder;
@@ -120,7 +120,7 @@ public class BasicQueryClient implements QueryClient {
         final int topListSize = counter / listSize;
 
         // pre-allocate the response matrix
-        @SuppressWarnings({"rawtypes", "unchecked"})
+        @SuppressWarnings({ "rawtypes", "unchecked" })
         List<SearchHit>[] hits = new List[topListSize];
         for (int i = 0; i < hits.length; i++) {
             hits[i] = Arrays.asList(new SearchHit[listSize]);
@@ -143,16 +143,19 @@ public class BasicQueryClient implements QueryClient {
             if (fetchFields != null) {
                 fetchFields.forEach(builder::fetchField);
             }
+            if (cfg.runtimeMappings() != null) {
+                builder.runtimeMappings(cfg.runtimeMappings());
+            }
 
             SearchRequest search = prepareRequest(builder, false, entry.getKey());
             multiSearchBuilder.add(search);
         }
 
-        search(multiSearchBuilder.request(), ActionListener.wrap(r -> {
+        search(multiSearchBuilder.request(), listener.delegateFailureAndWrap((delegate, r) -> {
             for (MultiSearchResponse.Item item : r.getResponses()) {
                 // check for failures
                 if (item.isFailure()) {
-                    listener.onFailure(item.getFailure());
+                    delegate.onFailure(item.getFailure());
                     return;
                 }
                 // otherwise proceed
@@ -164,13 +167,26 @@ public class BasicQueryClient implements QueryClient {
                     positions.forEach(pos -> {
                         SearchHit previous = seq.get(pos / listSize).set(pos % listSize, doc);
                         if (previous != null) {
-                            throw new EqlIllegalArgumentException("Overriding sequence match [{}] with [{}]",
-                                new HitReference(previous), docRef);
+                            throw new EqlIllegalArgumentException(
+                                "Overriding sequence match [{}] with [{}]",
+                                new HitReference(previous),
+                                docRef
+                            );
                         }
                     });
                 }
             }
-            listener.onResponse(seq);
-        }, listener::onFailure));
+            delegate.onResponse(seq);
+        }));
+    }
+
+    @Override
+    public void multiQuery(List<SearchRequest> searches, ActionListener<MultiSearchResponse> listener) {
+        MultiSearchRequestBuilder multiSearchBuilder = client.prepareMultiSearch();
+        for (SearchRequest request : searches) {
+            request.indices(indices);
+            multiSearchBuilder.add(request);
+        }
+        search(multiSearchBuilder.request(), listener);
     }
 }

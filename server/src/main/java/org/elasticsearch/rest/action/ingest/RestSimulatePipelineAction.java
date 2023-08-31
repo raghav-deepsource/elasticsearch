@@ -9,13 +9,15 @@
 package org.elasticsearch.rest.action.ingest;
 
 import org.elasticsearch.action.ingest.SimulatePipelineRequest;
-import org.elasticsearch.client.node.NodeClient;
+import org.elasticsearch.client.internal.node.NodeClient;
 import org.elasticsearch.common.bytes.BytesReference;
-import org.elasticsearch.common.collect.Tuple;
-import org.elasticsearch.common.xcontent.XContentType;
+import org.elasticsearch.core.Tuple;
 import org.elasticsearch.rest.BaseRestHandler;
 import org.elasticsearch.rest.RestRequest;
+import org.elasticsearch.rest.Scope;
+import org.elasticsearch.rest.ServerlessScope;
 import org.elasticsearch.rest.action.RestToXContentListener;
+import org.elasticsearch.xcontent.XContentType;
 
 import java.io.IOException;
 import java.util.List;
@@ -23,6 +25,7 @@ import java.util.List;
 import static org.elasticsearch.rest.RestRequest.Method.GET;
 import static org.elasticsearch.rest.RestRequest.Method.POST;
 
+@ServerlessScope(Scope.PUBLIC)
 public class RestSimulatePipelineAction extends BaseRestHandler {
 
     @Override
@@ -31,7 +34,8 @@ public class RestSimulatePipelineAction extends BaseRestHandler {
             new Route(GET, "/_ingest/pipeline/{id}/_simulate"),
             new Route(POST, "/_ingest/pipeline/{id}/_simulate"),
             new Route(GET, "/_ingest/pipeline/_simulate"),
-            new Route(POST, "/_ingest/pipeline/_simulate"));
+            new Route(POST, "/_ingest/pipeline/_simulate")
+        );
     }
 
     @Override

@@ -6,22 +6,20 @@
  */
 package org.elasticsearch.xpack.ml.notifications;
 
-import org.elasticsearch.client.Client;
-import org.elasticsearch.client.OriginSettingClient;
+import org.elasticsearch.client.internal.Client;
 import org.elasticsearch.cluster.service.ClusterService;
-import org.elasticsearch.xpack.core.common.notifications.AbstractAuditor;
-import org.elasticsearch.xpack.core.ml.notifications.NotificationsIndex;
 import org.elasticsearch.xpack.core.ml.notifications.DataFrameAnalyticsAuditMessage;
-import org.elasticsearch.xpack.ml.MlIndexTemplateRegistry;
 
-import static org.elasticsearch.xpack.core.ClientHelper.ML_ORIGIN;
+public class DataFrameAnalyticsAuditor extends AbstractMlAuditor<DataFrameAnalyticsAuditMessage> {
 
-public class DataFrameAnalyticsAuditor extends AbstractAuditor<DataFrameAnalyticsAuditMessage> {
+    private final boolean includeNodeInfo;
 
-    public DataFrameAnalyticsAuditor(Client client, ClusterService clusterService) {
-        super(new OriginSettingClient(client, ML_ORIGIN), NotificationsIndex.NOTIFICATIONS_INDEX,
-            MlIndexTemplateRegistry.NOTIFICATIONS_TEMPLATE,
-            clusterService.getNodeName(),
-            DataFrameAnalyticsAuditMessage::new, clusterService);
+    public DataFrameAnalyticsAuditor(Client client, ClusterService clusterService, boolean includeNodeInfo) {
+        super(client, DataFrameAnalyticsAuditMessage::new, clusterService);
+        this.includeNodeInfo = includeNodeInfo;
+    }
+
+    public boolean includeNodeInfo() {
+        return includeNodeInfo;
     }
 }

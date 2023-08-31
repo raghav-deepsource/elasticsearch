@@ -9,13 +9,12 @@
 package org.elasticsearch.index.mapper;
 
 import org.apache.lucene.document.Field;
-import org.apache.lucene.document.FieldType;
-import org.apache.lucene.index.IndexOptions;
+import org.apache.lucene.document.StringField;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.TermQuery;
 import org.apache.lucene.util.BytesRef;
-import org.elasticsearch.Version;
+import org.elasticsearch.index.IndexVersion;
 import org.elasticsearch.index.query.SearchExecutionContext;
 
 import java.util.Collections;
@@ -23,42 +22,35 @@ import java.util.Collections;
 public class NestedPathFieldMapper extends MetadataFieldMapper {
 
     public static final String NAME_PRE_V8 = "_type";
+
     public static final String NAME = "_nested_path";
 
-    public static String name(Version version) {
-        if (version.before(Version.V_8_0_0)) {
+    private static final NestedPathFieldMapper INSTANCE = new NestedPathFieldMapper(NAME);
+    private static final NestedPathFieldMapper INSTANCE_PRE_V8 = new NestedPathFieldMapper(NAME_PRE_V8);
+
+    public static String name(IndexVersion version) {
+        if (version.before(IndexVersion.V_8_0_0)) {
             return NAME_PRE_V8;
         }
         return NAME;
     }
 
-    public static Query filter(Version version, String path) {
+    public static Query filter(IndexVersion version, String path) {
         return new TermQuery(new Term(name(version), new BytesRef(path)));
     }
 
-    public static Field field(Version version, String path) {
-        return new Field(name(version), path, Defaults.FIELD_TYPE);
+    public static Field field(IndexVersion version, String path) {
+        return new StringField(name(version), path, Field.Store.NO);
     }
 
-    public static class Defaults {
-
-        public static final FieldType FIELD_TYPE = new FieldType();
-
-        static {
-            FIELD_TYPE.setIndexOptions(IndexOptions.DOCS);
-            FIELD_TYPE.setTokenized(false);
-            FIELD_TYPE.setStored(false);
-            FIELD_TYPE.setOmitNorms(true);
-            FIELD_TYPE.freeze();
-        }
-    }
-
-    public static final TypeParser PARSER = new FixedTypeParser(c -> new NestedPathFieldMapper(c.indexVersionCreated()));
+    public static final TypeParser PARSER = new FixedTypeParser(
+        c -> c.indexVersionCreated().before(IndexVersion.V_8_0_0) ? INSTANCE_PRE_V8 : INSTANCE
+    );
 
     public static final class NestedPathFieldType extends StringFieldType {
 
-        private NestedPathFieldType(Version version) {
-            super(NestedPathFieldMapper.name(version), true, false, false, TextSearchInfo.SIMPLE_MATCH_ONLY, Collections.emptyMap());
+        private NestedPathFieldType(String name) {
+            super(name, true, false, false, TextSearchInfo.SIMPLE_MATCH_ONLY, Collections.emptyMap());
         }
 
         @Override
@@ -75,10 +67,15 @@ public class NestedPathFieldMapper extends MetadataFieldMapper {
         public ValueFetcher valueFetcher(SearchExecutionContext context, String format) {
             throw new UnsupportedOperationException("Cannot fetch values for internal field [" + name() + "].");
         }
+
+        @Override
+        public boolean mayExistInIndex(SearchExecutionContext context) {
+            return false;
+        }
     }
 
-    private NestedPathFieldMapper(Version version) {
-        super(new NestedPathFieldType(version));
+    private NestedPathFieldMapper(String name) {
+        super(new NestedPathFieldType(name));
     }
 
     @Override
@@ -86,4 +83,8 @@ public class NestedPathFieldMapper extends MetadataFieldMapper {
         return NAME;
     }
 
+    @Override
+    public SourceLoader.SyntheticFieldLoader syntheticFieldLoader() {
+        return SourceLoader.SyntheticFieldLoader.NOTHING;
+    }
 }

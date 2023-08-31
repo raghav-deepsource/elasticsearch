@@ -16,9 +16,6 @@ import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.common.xcontent.ToXContentFragment;
-import org.elasticsearch.common.xcontent.XContentBuilder;
-import org.elasticsearch.common.xcontent.XContentFactory;
 import org.elasticsearch.http.HttpInfo;
 import org.elasticsearch.ingest.IngestInfo;
 import org.elasticsearch.monitor.jvm.JvmInfo;
@@ -26,7 +23,10 @@ import org.elasticsearch.monitor.os.OsInfo;
 import org.elasticsearch.monitor.process.ProcessInfo;
 import org.elasticsearch.search.aggregations.support.AggregationInfo;
 import org.elasticsearch.threadpool.ThreadPoolInfo;
+import org.elasticsearch.transport.RemoteClusterServerInfo;
 import org.elasticsearch.transport.TransportInfo;
+import org.elasticsearch.xcontent.ToXContentFragment;
+import org.elasticsearch.xcontent.XContentBuilder;
 
 import java.io.IOException;
 import java.util.List;
@@ -49,7 +49,7 @@ public class NodesInfoResponse extends BaseNodesResponse<NodeInfo> implements To
 
     @Override
     protected void writeNodesTo(StreamOutput out, List<NodeInfo> nodes) throws IOException {
-        out.writeList(nodes);
+        out.writeCollection(nodes);
     }
 
     @Override
@@ -64,7 +64,8 @@ public class NodesInfoResponse extends BaseNodesResponse<NodeInfo> implements To
             builder.field("ip", nodeInfo.getNode().getHostAddress());
 
             builder.field("version", nodeInfo.getVersion());
-            builder.field("build_flavor", nodeInfo.getBuild().flavor().displayName());
+            builder.field("transport_version", nodeInfo.getTransportVersion().id());
+            builder.field("build_flavor", nodeInfo.getBuild().flavor());
             builder.field("build_type", nodeInfo.getBuild().type().displayName());
             builder.field("build_hash", nodeInfo.getBuild().hash());
             if (nodeInfo.getTotalIndexingBuffer() != null) {
@@ -110,6 +111,9 @@ public class NodesInfoResponse extends BaseNodesResponse<NodeInfo> implements To
             if (nodeInfo.getInfo(HttpInfo.class) != null) {
                 nodeInfo.getInfo(HttpInfo.class).toXContent(builder, params);
             }
+            if (nodeInfo.getInfo(RemoteClusterServerInfo.class) != null) {
+                nodeInfo.getInfo(RemoteClusterServerInfo.class).toXContent(builder, params);
+            }
             if (nodeInfo.getInfo(PluginsAndModules.class) != null) {
                 nodeInfo.getInfo(PluginsAndModules.class).toXContent(builder, params);
             }
@@ -128,14 +132,6 @@ public class NodesInfoResponse extends BaseNodesResponse<NodeInfo> implements To
 
     @Override
     public String toString() {
-        try {
-            XContentBuilder builder = XContentFactory.jsonBuilder().prettyPrint();
-            builder.startObject();
-            toXContent(builder, EMPTY_PARAMS);
-            builder.endObject();
-            return Strings.toString(builder);
-        } catch (IOException e) {
-            return "{ \"error\" : \"" + e.getMessage() + "\"}";
-        }
+        return Strings.toString(this, true, true);
     }
 }

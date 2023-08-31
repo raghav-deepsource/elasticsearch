@@ -11,7 +11,6 @@ import org.elasticsearch.test.AbstractWireSerializingTestCase;
 import org.elasticsearch.xpack.sql.SqlIllegalArgumentException;
 import org.elasticsearch.xpack.sql.expression.function.scalar.string.StringProcessor.StringOperation;
 
-import java.io.IOException;
 import java.util.Locale;
 
 public class StringFunctionProcessorTests extends AbstractWireSerializingTestCase<StringProcessor> {
@@ -30,7 +29,7 @@ public class StringFunctionProcessorTests extends AbstractWireSerializingTestCas
     }
 
     @Override
-    protected StringProcessor mutateInstance(StringProcessor instance) throws IOException {
+    protected StringProcessor mutateInstance(StringProcessor instance) {
         return new StringProcessor(randomValueOtherThan(instance.processor(), () -> randomFrom(StringOperation.values())));
     }
 
@@ -180,7 +179,7 @@ public class StringFunctionProcessorTests extends AbstractWireSerializingTestCas
         assertEquals("", proc.process(withRandomWhitespaces(" \t  \r\n \n ", true, true)));
         assertEquals("foo bar", proc.process(withRandomWhitespaces("foo bar", true, false)));
         assertEquals("foo   bar", proc.process(withRandomWhitespaces("foo   bar", false, true)));
-        assertEquals("foo bar", proc.process(withRandomWhitespaces("foo bar",true, true)));
+        assertEquals("foo bar", proc.process(withRandomWhitespaces("foo bar", true, true)));
         assertEquals("foo \t \r\n \n bar", proc.process(withRandomWhitespaces("foo \t \r\n \n bar", true, true)));
         assertEquals("f", proc.process('f'));
 

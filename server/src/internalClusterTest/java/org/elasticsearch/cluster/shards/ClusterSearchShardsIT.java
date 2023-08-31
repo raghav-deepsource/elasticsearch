@@ -26,26 +26,25 @@ import static org.elasticsearch.cluster.metadata.IndexMetadata.SETTING_READ_ONLY
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertBlocked;
 import static org.hamcrest.Matchers.equalTo;
 
-@ClusterScope(scope= Scope.SUITE, numDataNodes = 2)
+@ClusterScope(scope = Scope.SUITE, numDataNodes = 2)
 public class ClusterSearchShardsIT extends ESIntegTestCase {
 
     @Override
-    protected Settings nodeSettings(int nodeOrdinal) {
-        switch(nodeOrdinal % 2) {
-        case 1:
-            return Settings.builder().put(super.nodeSettings(nodeOrdinal)).put("node.attr.tag", "B").build();
-        case 0:
-            return Settings.builder().put(super.nodeSettings(nodeOrdinal)).put("node.attr.tag", "A").build();
-        }
-        return super.nodeSettings(nodeOrdinal);
+    protected Settings nodeSettings(int nodeOrdinal, Settings otherSettings) {
+        return switch (nodeOrdinal % 2) {
+            case 1 -> Settings.builder().put(super.nodeSettings(nodeOrdinal, otherSettings)).put("node.attr.tag", "B").build();
+            case 0 -> Settings.builder().put(super.nodeSettings(nodeOrdinal, otherSettings)).put("node.attr.tag", "A").build();
+            default -> super.nodeSettings(nodeOrdinal, otherSettings);
+        };
     }
 
     public void testSingleShardAllocation() throws Exception {
-        client().admin().indices().prepareCreate("test").setSettings(Settings.builder()
-            .put("index.number_of_shards", "1").put("index.number_of_replicas", 0)
-            .put("index.routing.allocation.include.tag", "A")).execute().actionGet();
+        indicesAdmin().prepareCreate("test")
+            .setSettings(indexSettings(1, 0).put("index.routing.allocation.include.tag", "A"))
+            .execute()
+            .actionGet();
         ensureGreen();
-        ClusterSearchShardsResponse response = client().admin().cluster().prepareSearchShards("test").execute().actionGet();
+        ClusterSearchShardsResponse response = clusterAdmin().prepareSearchShards("test").execute().actionGet();
         assertThat(response.getGroups().length, equalTo(1));
         assertThat(response.getGroups()[0].getShardId().getIndexName(), equalTo("test"));
         assertThat(response.getGroups()[0].getShardId().getId(), equalTo(0));
@@ -53,7 +52,7 @@ public class ClusterSearchShardsIT extends ESIntegTestCase {
         assertThat(response.getNodes().length, equalTo(1));
         assertThat(response.getGroups()[0].getShards()[0].currentNodeId(), equalTo(response.getNodes()[0].getId()));
 
-        response = client().admin().cluster().prepareSearchShards("test").setRouting("A").execute().actionGet();
+        response = clusterAdmin().prepareSearchShards("test").setRouting("A").execute().actionGet();
         assertThat(response.getGroups().length, equalTo(1));
         assertThat(response.getGroups()[0].getShardId().getIndexName(), equalTo("test"));
         assertThat(response.getGroups()[0].getShardId().getId(), equalTo(0));
@@ -64,37 +63,36 @@ public class ClusterSearchShardsIT extends ESIntegTestCase {
     }
 
     public void testMultipleShardsSingleNodeAllocation() throws Exception {
-        client().admin().indices().prepareCreate("test").setSettings(Settings.builder()
-            .put("index.number_of_shards", "4").put("index.number_of_replicas", 0)
-            .put("index.routing.allocation.include.tag", "A")).execute().actionGet();
+        indicesAdmin().prepareCreate("test")
+            .setSettings(indexSettings(4, 0).put("index.routing.allocation.include.tag", "A"))
+            .execute()
+            .actionGet();
         ensureGreen();
 
-        ClusterSearchShardsResponse response = client().admin().cluster().prepareSearchShards("test").execute().actionGet();
+        ClusterSearchShardsResponse response = clusterAdmin().prepareSearchShards("test").execute().actionGet();
         assertThat(response.getGroups().length, equalTo(4));
         assertThat(response.getGroups()[0].getShardId().getIndexName(), equalTo("test"));
         assertThat(response.getNodes().length, equalTo(1));
         assertThat(response.getGroups()[0].getShards()[0].currentNodeId(), equalTo(response.getNodes()[0].getId()));
 
-        response = client().admin().cluster().prepareSearchShards("test").setRouting("ABC").execute().actionGet();
+        response = clusterAdmin().prepareSearchShards("test").setRouting("ABC").execute().actionGet();
         assertThat(response.getGroups().length, equalTo(1));
 
-        response = client().admin().cluster().prepareSearchShards("test").setPreference("_shards:2").execute().actionGet();
+        response = clusterAdmin().prepareSearchShards("test").setPreference("_shards:2").execute().actionGet();
         assertThat(response.getGroups().length, equalTo(1));
         assertThat(response.getGroups()[0].getShardId().getId(), equalTo(2));
     }
 
     public void testMultipleIndicesAllocation() throws Exception {
-        client().admin().indices().prepareCreate("test1").setSettings(Settings.builder()
-                .put("index.number_of_shards", "4").put("index.number_of_replicas", 1)).execute().actionGet();
-        client().admin().indices().prepareCreate("test2").setSettings(Settings.builder()
-                .put("index.number_of_shards", "4").put("index.number_of_replicas", 1)).execute().actionGet();
-        client().admin().indices().prepareAliases()
-                .addAliasAction(AliasActions.add().index("test1").alias("routing_alias").routing("ABC"))
-                .addAliasAction(AliasActions.add().index("test2").alias("routing_alias").routing("EFG"))
-                .get();
-        client().admin().cluster().prepareHealth().setWaitForEvents(Priority.LANGUID).setWaitForGreenStatus().execute().actionGet();
+        createIndex("test1", 4, 1);
+        createIndex("test2", 4, 1);
+        indicesAdmin().prepareAliases()
+            .addAliasAction(AliasActions.add().index("test1").alias("routing_alias").routing("ABC"))
+            .addAliasAction(AliasActions.add().index("test2").alias("routing_alias").routing("EFG"))
+            .get();
+        clusterAdmin().prepareHealth().setWaitForEvents(Priority.LANGUID).setWaitForGreenStatus().execute().actionGet();
 
-        ClusterSearchShardsResponse response = client().admin().cluster().prepareSearchShards("routing_alias").execute().actionGet();
+        ClusterSearchShardsResponse response = clusterAdmin().prepareSearchShards("routing_alias").execute().actionGet();
         assertThat(response.getGroups().length, equalTo(2));
         assertThat(response.getGroups()[0].getShards().length, equalTo(2));
         assertThat(response.getGroups()[1].getShards().length, equalTo(2));
@@ -128,11 +126,15 @@ public class ClusterSearchShardsIT extends ESIntegTestCase {
         ensureGreen("test-blocks");
 
         // Request is not blocked
-        for (String blockSetting : Arrays.asList(SETTING_BLOCKS_READ, SETTING_BLOCKS_WRITE, SETTING_READ_ONLY,
-            SETTING_READ_ONLY_ALLOW_DELETE)) {
+        for (String blockSetting : Arrays.asList(
+            SETTING_BLOCKS_READ,
+            SETTING_BLOCKS_WRITE,
+            SETTING_READ_ONLY,
+            SETTING_READ_ONLY_ALLOW_DELETE
+        )) {
             try {
                 enableIndexBlock("test-blocks", blockSetting);
-                ClusterSearchShardsResponse response = client().admin().cluster().prepareSearchShards("test-blocks").execute().actionGet();
+                ClusterSearchShardsResponse response = clusterAdmin().prepareSearchShards("test-blocks").execute().actionGet();
                 assertThat(response.getGroups().length, equalTo(numShards.numPrimaries));
             } finally {
                 disableIndexBlock("test-blocks", blockSetting);
@@ -142,7 +144,7 @@ public class ClusterSearchShardsIT extends ESIntegTestCase {
         // Request is blocked
         try {
             enableIndexBlock("test-blocks", SETTING_BLOCKS_METADATA);
-            assertBlocked(client().admin().cluster().prepareSearchShards("test-blocks"));
+            assertBlocked(clusterAdmin().prepareSearchShards("test-blocks"));
         } finally {
             disableIndexBlock("test-blocks", SETTING_BLOCKS_METADATA);
         }

@@ -7,21 +7,10 @@
 
 package org.elasticsearch.xpack.analytics.multiterms;
 
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.stream.Collectors;
-
-import org.elasticsearch.common.ParseField;
+import org.elasticsearch.TransportVersion;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
-import org.elasticsearch.common.xcontent.ContextParser;
 import org.elasticsearch.common.xcontent.LoggingDeprecationHandler;
-import org.elasticsearch.common.xcontent.ObjectParser;
-import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.search.aggregations.AbstractAggregationBuilder;
 import org.elasticsearch.search.aggregations.AggregationBuilder;
 import org.elasticsearch.search.aggregations.Aggregator;
@@ -35,6 +24,18 @@ import org.elasticsearch.search.aggregations.support.CoreValuesSourceType;
 import org.elasticsearch.search.aggregations.support.MultiValuesSourceFieldConfig;
 import org.elasticsearch.search.aggregations.support.ValuesSourceConfig;
 import org.elasticsearch.search.aggregations.support.ValuesSourceRegistry;
+import org.elasticsearch.xcontent.ContextParser;
+import org.elasticsearch.xcontent.ObjectParser;
+import org.elasticsearch.xcontent.ParseField;
+import org.elasticsearch.xcontent.XContentBuilder;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.stream.Collectors;
 
 public class MultiTermsAggregationBuilder extends AbstractAggregationBuilder<MultiTermsAggregationBuilder> {
     public static final String NAME = "multi_terms";
@@ -46,12 +47,8 @@ public class MultiTermsAggregationBuilder extends AbstractAggregationBuilder<Mul
     public static final ParseField REQUIRED_SIZE_FIELD_NAME = new ParseField("size");
     public static final ParseField SHOW_TERM_DOC_COUNT_ERROR = new ParseField("show_term_doc_count_error");
 
-    static final TermsAggregator.BucketCountThresholds DEFAULT_BUCKET_COUNT_THRESHOLDS = new TermsAggregator.BucketCountThresholds(
-        1,
-        0,
-        10,
-        -1
-    );
+    static final TermsAggregator.ConstantBucketCountThresholds DEFAULT_BUCKET_COUNT_THRESHOLDS =
+        new TermsAggregator.ConstantBucketCountThresholds(1, 0, 10, -1);
 
     public static final ObjectParser<MultiTermsAggregationBuilder, String> PARSER = ObjectParser.fromBuilder(
         NAME,
@@ -63,7 +60,8 @@ public class MultiTermsAggregationBuilder extends AbstractAggregationBuilder<Mul
             true,
             true,
             false,
-            true
+            true,
+            false
         );
 
         PARSER.declareBoolean(MultiTermsAggregationBuilder::showTermDocCountError, MultiTermsAggregationBuilder.SHOW_TERM_DOC_COUNT_ERROR);
@@ -149,6 +147,16 @@ public class MultiTermsAggregationBuilder extends AbstractAggregationBuilder<Mul
         showTermDocCountError = in.readBoolean();
     }
 
+    @Override
+    public boolean supportsSampling() {
+        return true;
+    }
+
+    @Override
+    public boolean supportsParallelCollection() {
+        return false;
+    }
+
     /**
      * Sets the field to use for this aggregation.
      */
@@ -188,7 +196,7 @@ public class MultiTermsAggregationBuilder extends AbstractAggregationBuilder<Mul
 
     @Override
     protected final void doWriteTo(StreamOutput out) throws IOException {
-        out.writeList(terms);
+        out.writeCollection(terms);
         order.writeTo(out);
         out.writeOptionalWriteable(collectMode);
         bucketCountThresholds.writeTo(out);
@@ -426,5 +434,10 @@ public class MultiTermsAggregationBuilder extends AbstractAggregationBuilder<Mul
             && Objects.equals(this.order, other.order)
             && Objects.equals(this.collectMode, other.collectMode)
             && Objects.equals(this.bucketCountThresholds, other.bucketCountThresholds);
+    }
+
+    @Override
+    public TransportVersion getMinimalSupportedVersion() {
+        return TransportVersion.V_7_12_0;
     }
 }

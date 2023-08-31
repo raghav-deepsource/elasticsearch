@@ -8,17 +8,17 @@
 package org.elasticsearch.search.aggregations.metrics;
 
 import org.apache.lucene.index.LeafReader;
-import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.PointValues;
 import org.apache.lucene.search.CollectionTerminatedException;
 import org.apache.lucene.search.ScoreMode;
 import org.apache.lucene.util.Bits;
-import org.elasticsearch.common.lease.Releasables;
 import org.elasticsearch.common.util.DoubleArray;
+import org.elasticsearch.core.Releasables;
 import org.elasticsearch.index.fielddata.NumericDoubleValues;
 import org.elasticsearch.index.fielddata.SortedNumericDoubleValues;
 import org.elasticsearch.search.DocValueFormat;
 import org.elasticsearch.search.MultiValueMode;
+import org.elasticsearch.search.aggregations.AggregationExecutionContext;
 import org.elasticsearch.search.aggregations.Aggregator;
 import org.elasticsearch.search.aggregations.InternalAggregation;
 import org.elasticsearch.search.aggregations.LeafBucketCollector;
@@ -42,18 +42,13 @@ public class MinAggregator extends NumericMetricsAggregator.SingleValue {
 
     DoubleArray mins;
 
-    MinAggregator(String name,
-                    ValuesSourceConfig config,
-                    AggregationContext context,
-                    Aggregator parent,
-                    Map<String, Object> metadata) throws IOException {
+    MinAggregator(String name, ValuesSourceConfig config, AggregationContext context, Aggregator parent, Map<String, Object> metadata)
+        throws IOException {
         super(name, context, parent, metadata);
-        // TODO: Stop using nulls here
-        this.valuesSource = config.hasValues() ? (ValuesSource.Numeric) config.getValuesSource() : null;
-        if (valuesSource != null) {
-            mins = context.bigArrays().newDoubleArray(1, false);
-            mins.fill(0, mins.size(), Double.POSITIVE_INFINITY);
-        }
+        assert config.hasValues();
+        this.valuesSource = (ValuesSource.Numeric) config.getValuesSource();
+        mins = context.bigArrays().newDoubleArray(1, false);
+        mins.fill(0, mins.size(), Double.POSITIVE_INFINITY);
         this.format = config.format();
         this.pointConverter = pointReaderIfAvailable(config);
         if (pointConverter != null) {
@@ -65,22 +60,13 @@ public class MinAggregator extends NumericMetricsAggregator.SingleValue {
 
     @Override
     public ScoreMode scoreMode() {
-        return valuesSource != null && valuesSource.needsScores() ? ScoreMode.COMPLETE : ScoreMode.COMPLETE_NO_SCORES;
+        return valuesSource.needsScores() ? ScoreMode.COMPLETE : ScoreMode.COMPLETE_NO_SCORES;
     }
 
     @Override
-    public LeafBucketCollector getLeafCollector(LeafReaderContext ctx,
-            final LeafBucketCollector sub) throws IOException {
-        if (valuesSource == null) {
-            if (parent == null) {
-                return LeafBucketCollector.NO_OP_COLLECTOR;
-            } else {
-                // we have no parent and the values source is empty so we can skip collecting hits.
-                throw new CollectionTerminatedException();
-            }
-        }
+    public LeafBucketCollector getLeafCollector(AggregationExecutionContext aggCtx, final LeafBucketCollector sub) throws IOException {
         if (pointConverter != null) {
-            Number segMin = findLeafMinValue(ctx.reader(), pointField, pointConverter);
+            Number segMin = findLeafMinValue(aggCtx.getLeafReaderContext().reader(), pointField, pointConverter);
             if (segMin != null) {
                 /*
                  * There is no parent aggregator (see {@link MinAggregator#getPointReaderOrNull}
@@ -90,13 +76,12 @@ public class MinAggregator extends NumericMetricsAggregator.SingleValue {
                 min = Math.min(min, segMin.doubleValue());
                 mins.set(0, min);
                 // the minimum value has been extracted, we don't need to collect hits on this segment.
-                throw new CollectionTerminatedException();
+                return LeafBucketCollector.NO_OP_COLLECTOR;
             }
         }
-        final SortedNumericDoubleValues allValues = valuesSource.doubleValues(ctx);
+        final SortedNumericDoubleValues allValues = valuesSource.doubleValues(aggCtx.getLeafReaderContext());
         final NumericDoubleValues values = MultiValueMode.MIN.select(allValues);
         return new LeafBucketCollectorBase(sub, allValues) {
-
             @Override
             public void collect(int doc, long bucket) throws IOException {
                 if (bucket >= mins.size()) {
@@ -117,7 +102,7 @@ public class MinAggregator extends NumericMetricsAggregator.SingleValue {
 
     @Override
     public double metric(long owningBucketOrd) {
-        if (valuesSource == null || owningBucketOrd >= mins.size()) {
+        if (owningBucketOrd >= mins.size()) {
             return Double.POSITIVE_INFINITY;
         }
         return mins.get(owningBucketOrd);
@@ -125,22 +110,21 @@ public class MinAggregator extends NumericMetricsAggregator.SingleValue {
 
     @Override
     public InternalAggregation buildAggregation(long bucket) {
-        if (valuesSource == null || bucket >= mins.size()) {
+        if (bucket >= mins.size()) {
             return buildEmptyAggregation();
         }
-        return new InternalMin(name, mins.get(bucket), format, metadata());
+        return new Min(name, mins.get(bucket), format, metadata());
     }
 
     @Override
     public InternalAggregation buildEmptyAggregation() {
-        return new InternalMin(name, Double.POSITIVE_INFINITY, format, metadata());
+        return Min.createEmptyMin(name, format, metadata());
     }
 
     @Override
     public void doClose() {
         Releasables.close(mins);
     }
-
 
     /**
      * Returns the minimum value indexed in the <code>fieldName</code> field or <code>null</code>

@@ -9,9 +9,9 @@
 package org.elasticsearch.search.profile.query;
 
 import org.apache.lucene.index.LeafReaderContext;
-import org.apache.lucene.index.Term;
 import org.apache.lucene.search.BulkScorer;
 import org.apache.lucene.search.Explanation;
+import org.apache.lucene.search.Matches;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.Scorer;
 import org.apache.lucene.search.ScorerSupplier;
@@ -19,7 +19,6 @@ import org.apache.lucene.search.Weight;
 import org.elasticsearch.search.profile.Timer;
 
 import java.io.IOException;
-import java.util.Set;
 
 /**
  * Weight wrapper that will compute how much time it takes to build the
@@ -31,7 +30,7 @@ public final class ProfileWeight extends Weight {
     private final Weight subQueryWeight;
     private final QueryProfileBreakdown profile;
 
-    public ProfileWeight(Query query, Weight subQueryWeight, QueryProfileBreakdown profile) throws IOException {
+    public ProfileWeight(Query query, Weight subQueryWeight, QueryProfileBreakdown profile) {
         super(query);
         this.subQueryWeight = subQueryWeight;
         this.profile = profile;
@@ -48,7 +47,7 @@ public final class ProfileWeight extends Weight {
 
     @Override
     public ScorerSupplier scorerSupplier(LeafReaderContext context) throws IOException {
-        Timer timer = profile.getTimer(QueryTimingType.BUILD_SCORER);
+        final Timer timer = profile.getNewTimer(QueryTimingType.BUILD_SCORER);
         timer.start();
         final ScorerSupplier subQueryScorerSupplier;
         try {
@@ -103,8 +102,14 @@ public final class ProfileWeight extends Weight {
     }
 
     @Override
-    public void extractTerms(Set<Term> set) {
-        subQueryWeight.extractTerms(set);
+    public int count(LeafReaderContext context) throws IOException {
+        Timer timer = profile.getNewTimer(QueryTimingType.COUNT_WEIGHT);
+        timer.start();
+        try {
+            return subQueryWeight.count(context);
+        } finally {
+            timer.stop();
+        }
     }
 
     @Override
@@ -112,4 +117,7 @@ public final class ProfileWeight extends Weight {
         return false;
     }
 
+    public Matches matches(LeafReaderContext context, int doc) throws IOException {
+        return subQueryWeight.matches(context, doc);
+    }
 }

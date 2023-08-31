@@ -8,8 +8,8 @@
 package org.elasticsearch.persistent;
 
 import org.elasticsearch.common.io.stream.Writeable;
-import org.elasticsearch.test.AbstractWireSerializingTestCase;
 import org.elasticsearch.persistent.PersistentTasksNodeService.Status;
+import org.elasticsearch.test.AbstractWireSerializingTestCase;
 
 import static org.hamcrest.Matchers.containsString;
 
@@ -18,6 +18,11 @@ public class PersistentTasksNodeServiceStatusTests extends AbstractWireSerializi
     @Override
     protected Status createTestInstance() {
         return new Status(randomFrom(AllocatedPersistentTask.State.values()));
+    }
+
+    @Override
+    protected Status mutateInstance(Status instance) {
+        return null;// TODO implement https://github.com/elastic/elasticsearch/issues/25929
     }
 
     @Override

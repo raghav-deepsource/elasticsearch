@@ -10,7 +10,6 @@ package org.elasticsearch.index.query;
 
 import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.common.io.stream.StreamInput;
-import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.index.Index;
 import org.elasticsearch.rest.RestStatus;
 
@@ -21,11 +20,11 @@ import java.io.IOException;
  */
 public class QueryShardException extends ElasticsearchException {
 
-    public QueryShardException(SearchExecutionContext context, String msg, Object... args) {
+    public QueryShardException(QueryRewriteContext context, String msg, Object... args) {
         this(context, msg, null, args);
     }
 
-    public QueryShardException(SearchExecutionContext context, String msg, Throwable cause, Object... args) {
+    public QueryShardException(QueryRewriteContext context, String msg, Throwable cause, Object... args) {
         this(context.getFullyQualifiedIndex(), msg, cause, args);
     }
 
@@ -38,17 +37,12 @@ public class QueryShardException extends ElasticsearchException {
         setIndex(index);
     }
 
-    public QueryShardException(StreamInput in) throws IOException{
+    public QueryShardException(StreamInput in) throws IOException {
         super(in);
     }
 
     @Override
     public RestStatus status() {
         return RestStatus.BAD_REQUEST;
-    }
-
-    @Override
-    public void writeTo(StreamOutput out) throws IOException {
-        super.writeTo(out);
     }
 }

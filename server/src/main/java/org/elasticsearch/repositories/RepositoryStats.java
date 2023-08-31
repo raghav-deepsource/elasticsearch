@@ -29,7 +29,7 @@ public class RepositoryStats implements Writeable {
     }
 
     public RepositoryStats(StreamInput in) throws IOException {
-        this.requestCounts = in.readMap(StreamInput::readString, StreamInput::readLong);
+        this.requestCounts = in.readMap(StreamInput::readLong);
     }
 
     public RepositoryStats merge(RepositoryStats otherStats) {
@@ -61,8 +61,6 @@ public class RepositoryStats implements Writeable {
 
     @Override
     public String toString() {
-        return "RepositoryStats{" +
-            "requestCounts=" + requestCounts +
-            '}';
+        return "RepositoryStats{" + "requestCounts=" + requestCounts + '}';
     }
 }

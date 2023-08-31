@@ -11,19 +11,25 @@ package org.elasticsearch.search;
 import org.apache.lucene.search.BooleanClause.Occur;
 import org.apache.lucene.search.BooleanQuery;
 import org.apache.lucene.search.BoostQuery;
-import org.apache.lucene.search.Collector;
 import org.apache.lucene.search.FieldDoc;
 import org.apache.lucene.search.MatchNoDocsQuery;
 import org.apache.lucene.search.Query;
+import org.apache.lucene.search.TotalHits;
 import org.elasticsearch.action.search.SearchShardTask;
 import org.elasticsearch.action.search.SearchType;
-import org.elasticsearch.common.Nullable;
+import org.elasticsearch.cluster.routing.IndexRouting;
 import org.elasticsearch.common.lucene.search.Queries;
-import org.elasticsearch.common.unit.TimeValue;
+import org.elasticsearch.core.Nullable;
+import org.elasticsearch.core.Releasable;
+import org.elasticsearch.core.TimeValue;
+import org.elasticsearch.index.IndexMode;
 import org.elasticsearch.index.IndexService;
 import org.elasticsearch.index.IndexSettings;
 import org.elasticsearch.index.cache.bitset.BitsetFilterCache;
 import org.elasticsearch.index.engine.Engine;
+import org.elasticsearch.index.mapper.IdLoader;
+import org.elasticsearch.index.mapper.NestedLookup;
+import org.elasticsearch.index.mapper.SourceLoader;
 import org.elasticsearch.index.query.AbstractQueryBuilder;
 import org.elasticsearch.index.query.ParsedQuery;
 import org.elasticsearch.index.query.QueryBuilder;
@@ -48,8 +54,8 @@ import org.elasticsearch.search.internal.SearchContext;
 import org.elasticsearch.search.internal.ShardSearchContextId;
 import org.elasticsearch.search.internal.ShardSearchRequest;
 import org.elasticsearch.search.profile.Profilers;
-import org.elasticsearch.search.query.QueryPhaseExecutionException;
 import org.elasticsearch.search.query.QuerySearchResult;
+import org.elasticsearch.search.rank.RankShardContext;
 import org.elasticsearch.search.rescore.RescoreContext;
 import org.elasticsearch.search.slice.SliceBuilder;
 import org.elasticsearch.search.sort.SortAndFormats;
@@ -61,6 +67,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Executor;
 import java.util.function.LongSupplier;
 
 final class DefaultSearchContext extends SearchContext {
@@ -69,13 +76,13 @@ final class DefaultSearchContext extends SearchContext {
     private final ShardSearchRequest request;
     private final SearchShardTarget shardTarget;
     private final LongSupplier relativeTimeSupplier;
-    private SearchType searchType;
+    private final SearchType searchType;
     private final IndexShard indexShard;
     private final IndexService indexService;
     private final ContextIndexSearcher searcher;
-    private final DfsSearchResult dfsResult;
-    private final QuerySearchResult queryResult;
-    private final FetchSearchResult fetchResult;
+    private DfsSearchResult dfsResult;
+    private QuerySearchResult queryResult;
+    private FetchSearchResult fetchResult;
     private final float queryBoost;
     private final boolean lowLevelCancellation;
     private TimeValue timeout;
@@ -101,6 +108,7 @@ final class DefaultSearchContext extends SearchContext {
     // filter for sliced scroll
     private SliceBuilder sliceBuilder;
     private SearchShardTask task;
+    private RankShardContext rankShardContext;
 
     /**
      * The original query as sent by the user without the types and aliases
@@ -116,7 +124,6 @@ final class DefaultSearchContext extends SearchContext {
     private ParsedQuery postFilter;
     private Query aliasFilter;
     private int[] docIdsToLoad;
-    private int docsIdsToLoadSize;
     private SearchContextAggregations aggregations;
     private SearchHighlightContext highlight;
     private SuggestionSearchContext suggest;
@@ -124,31 +131,50 @@ final class DefaultSearchContext extends SearchContext {
     private Profilers profilers;
 
     private final Map<String, SearchExtBuilder> searchExtBuilders = new HashMap<>();
-    private final Map<Class<?>, Collector> queryCollectors = new HashMap<>();
     private final SearchExecutionContext searchExecutionContext;
     private final FetchPhase fetchPhase;
 
-    DefaultSearchContext(ReaderContext readerContext,
-                         ShardSearchRequest request,
-                         SearchShardTarget shardTarget,
-                         LongSupplier relativeTimeSupplier,
-                         TimeValue timeout,
-                         FetchPhase fetchPhase,
-                         boolean lowLevelCancellation) throws IOException {
+    DefaultSearchContext(
+        ReaderContext readerContext,
+        ShardSearchRequest request,
+        SearchShardTarget shardTarget,
+        LongSupplier relativeTimeSupplier,
+        TimeValue timeout,
+        FetchPhase fetchPhase,
+        boolean lowLevelCancellation,
+        Executor executor,
+        int maximumNumberOfSlices,
+        int minimumDocsPerSlice
+    ) throws IOException {
         this.readerContext = readerContext;
         this.request = request;
         this.fetchPhase = fetchPhase;
         this.searchType = request.searchType();
         this.shardTarget = shardTarget;
-        this.dfsResult = new DfsSearchResult(readerContext.id(), shardTarget, request);
-        this.queryResult = new QuerySearchResult(readerContext.id(), shardTarget, request);
-        this.fetchResult = new FetchSearchResult(readerContext.id(), shardTarget);
         this.indexService = readerContext.indexService();
         this.indexShard = readerContext.indexShard();
 
         Engine.Searcher engineSearcher = readerContext.acquireSearcher("search");
-        this.searcher = new ContextIndexSearcher(engineSearcher.getIndexReader(), engineSearcher.getSimilarity(),
-            engineSearcher.getQueryCache(), engineSearcher.getQueryCachingPolicy(), lowLevelCancellation);
+        if (executor == null) {
+            this.searcher = new ContextIndexSearcher(
+                engineSearcher.getIndexReader(),
+                engineSearcher.getSimilarity(),
+                engineSearcher.getQueryCache(),
+                engineSearcher.getQueryCachingPolicy(),
+                lowLevelCancellation
+            );
+        } else {
+            this.searcher = new ContextIndexSearcher(
+                engineSearcher.getIndexReader(),
+                engineSearcher.getSimilarity(),
+                engineSearcher.getQueryCache(),
+                engineSearcher.getQueryCachingPolicy(),
+                lowLevelCancellation,
+                executor,
+                maximumNumberOfSlices,
+                minimumDocsPerSlice
+            );
+        }
         releasables.addAll(List.of(engineSearcher, searcher));
 
         this.relativeTimeSupplier = relativeTimeSupplier;
@@ -165,12 +191,28 @@ final class DefaultSearchContext extends SearchContext {
         this.lowLevelCancellation = lowLevelCancellation;
     }
 
+    @Override
+    public void addFetchResult() {
+        this.fetchResult = new FetchSearchResult(this.readerContext.id(), this.shardTarget);
+    }
+
+    @Override
+    public void addQueryResult() {
+        this.queryResult = new QuerySearchResult(this.readerContext.id(), this.shardTarget, this.request);
+        addReleasable(queryResult::decRef);
+    }
+
+    @Override
+    public void addDfsResult() {
+        this.dfsResult = new DfsSearchResult(this.readerContext.id(), this.shardTarget, this.request);
+    }
+
     /**
      * Should be called before executing the main query and after all other parameters have been set.
      */
     @Override
-    public void preProcess(boolean rewrite) {
-        if (hasOnlySuggest() ) {
+    public void preProcess() {
+        if (hasOnlySuggest()) {
             return;
         }
         long from = from() == -1 ? 0 : from();
@@ -181,38 +223,62 @@ final class DefaultSearchContext extends SearchContext {
         if (resultWindow > maxResultWindow) {
             if (scrollContext() == null) {
                 throw new IllegalArgumentException(
-                        "Result window is too large, from + size must be less than or equal to: [" + maxResultWindow + "] but was ["
-                                + resultWindow + "]. See the scroll api for a more efficient way to request large data sets. "
-                                + "This limit can be set by changing the [" + IndexSettings.MAX_RESULT_WINDOW_SETTING.getKey()
-                                + "] index level setting.");
+                    "Result window is too large, from + size must be less than or equal to: ["
+                        + maxResultWindow
+                        + "] but was ["
+                        + resultWindow
+                        + "]. See the scroll api for a more efficient way to request large data sets. "
+                        + "This limit can be set by changing the ["
+                        + IndexSettings.MAX_RESULT_WINDOW_SETTING.getKey()
+                        + "] index level setting."
+                );
             }
             throw new IllegalArgumentException(
-                    "Batch size is too large, size must be less than or equal to: [" + maxResultWindow + "] but was [" + resultWindow
-                            + "]. Scroll batch sizes cost as much memory as result windows so they are controlled by the ["
-                            + IndexSettings.MAX_RESULT_WINDOW_SETTING.getKey() + "] index level setting.");
+                "Batch size is too large, size must be less than or equal to: ["
+                    + maxResultWindow
+                    + "] but was ["
+                    + resultWindow
+                    + "]. Scroll batch sizes cost as much memory as result windows so they are controlled by the ["
+                    + IndexSettings.MAX_RESULT_WINDOW_SETTING.getKey()
+                    + "] index level setting."
+            );
         }
         if (rescore != null) {
             if (sort != null) {
                 throw new IllegalArgumentException("Cannot use [sort] option in conjunction with [rescore].");
             }
             int maxWindow = indexService.getIndexSettings().getMaxRescoreWindow();
-            for (RescoreContext rescoreContext: rescore()) {
+            for (RescoreContext rescoreContext : rescore()) {
                 if (rescoreContext.getWindowSize() > maxWindow) {
-                    throw new IllegalArgumentException("Rescore window [" + rescoreContext.getWindowSize() + "] is too large. "
-                            + "It must be less than [" + maxWindow + "]. This prevents allocating massive heaps for storing the results "
-                            + "to be rescored. This limit can be set by changing the [" + IndexSettings.MAX_RESCORE_WINDOW_SETTING.getKey()
-                            + "] index level setting.");
+                    throw new IllegalArgumentException(
+                        "Rescore window ["
+                            + rescoreContext.getWindowSize()
+                            + "] is too large. "
+                            + "It must be less than ["
+                            + maxWindow
+                            + "]. This prevents allocating massive heaps for storing the results "
+                            + "to be rescored. This limit can be set by changing the ["
+                            + IndexSettings.MAX_RESCORE_WINDOW_SETTING.getKey()
+                            + "] index level setting."
+                    );
                 }
             }
         }
 
-        if (sliceBuilder != null) {
+        if (sliceBuilder != null && scrollContext() != null) {
             int sliceLimit = indexService.getIndexSettings().getMaxSlicesPerScroll();
             int numSlices = sliceBuilder.getMax();
             if (numSlices > sliceLimit) {
-                throw new IllegalArgumentException("The number of slices [" + numSlices + "] is too large. It must "
-                    + "be less than [" + sliceLimit + "]. This limit can be set by changing the [" +
-                    IndexSettings.MAX_SLICES_PER_SCROLL.getKey() + "] index level setting.");
+                throw new IllegalArgumentException(
+                    "The number of slices ["
+                        + numSlices
+                        + "] is too large. It must "
+                        + "be less than ["
+                        + sliceLimit
+                        + "]. This limit can be set by changing the ["
+                        + IndexSettings.MAX_SLICES_PER_SCROLL.getKey()
+                        + "] index level setting."
+                );
             }
         }
 
@@ -224,30 +290,32 @@ final class DefaultSearchContext extends SearchContext {
             throw new UncheckedIOException(e);
         }
 
-        if (query() == null) {
+        if (query == null) {
             parsedQuery(ParsedQuery.parsedMatchAllQuery());
         }
         if (queryBoost != AbstractQueryBuilder.DEFAULT_BOOST) {
-            parsedQuery(new ParsedQuery(new BoostQuery(query(), queryBoost), parsedQuery()));
+            parsedQuery(new ParsedQuery(new BoostQuery(query, queryBoost), parsedQuery()));
         }
         this.query = buildFilteredQuery(query);
-        if (rewrite) {
-            try {
-                this.query = searcher.rewrite(query);
-            } catch (IOException e) {
-                throw new QueryPhaseExecutionException(shardTarget, "Failed to rewrite main query", e);
-            }
+        if (lowLevelCancellation) {
+            searcher().addQueryCancellation(() -> {
+                final SearchShardTask task = getTask();
+                if (task != null) {
+                    task.ensureNotCancelled();
+                }
+            });
         }
     }
 
     @Override
     public Query buildFilteredQuery(Query query) {
         List<Query> filters = new ArrayList<>();
-        NestedHelper nestedHelper = new NestedHelper(searchExecutionContext::getObjectMapper, searchExecutionContext::isFieldMapped);
-        if (searchExecutionContext.hasNested()
-                && nestedHelper.mightMatchNestedDocs(query)
-                && (aliasFilter == null || nestedHelper.mightMatchNestedDocs(aliasFilter))) {
-            filters.add(Queries.newNonNestedFilter());
+        NestedLookup nestedLookup = searchExecutionContext.nestedLookup();
+        NestedHelper nestedHelper = new NestedHelper(nestedLookup, searchExecutionContext::isFieldMapped);
+        if (nestedLookup != NestedLookup.EMPTY
+            && nestedHelper.mightMatchNestedDocs(query)
+            && (aliasFilter == null || nestedHelper.mightMatchNestedDocs(aliasFilter))) {
+            filters.add(Queries.newNonNestedFilter(searchExecutionContext.indexVersionCreated()));
         }
 
         if (aliasFilter != null) {
@@ -323,8 +391,8 @@ final class DefaultSearchContext extends SearchContext {
 
     @Override
     public void addSearchExt(SearchExtBuilder searchExtBuilder) {
-        //it's ok to use the writeable name here given that we enforce it to be the same as the name of the element that gets
-        //parsed by the corresponding parser. There is one single name and one single way to retrieve the parsed object from the context.
+        // it's ok to use the writeable name here given that we enforce it to be the same as the name of the element that gets
+        // parsed by the corresponding parser. There is one single name and one single way to retrieve the parsed object from the context.
         searchExtBuilders.put(searchExtBuilder.getWriteableName(), searchExtBuilder);
     }
 
@@ -354,6 +422,16 @@ final class DefaultSearchContext extends SearchContext {
     }
 
     @Override
+    public RankShardContext rankShardContext() {
+        return rankShardContext;
+    }
+
+    @Override
+    public void rankShardContext(RankShardContext rankShardContext) {
+        this.rankShardContext = rankShardContext;
+    }
+
+    @Override
     public List<RescoreContext> rescore() {
         if (rescore == null) {
             return List.of();
@@ -371,7 +449,7 @@ final class DefaultSearchContext extends SearchContext {
 
     @Override
     public boolean hasScriptFields() {
-        return scriptFields != null;
+        return scriptFields != null && scriptFields.fields().isEmpty() == false;
     }
 
     @Override
@@ -562,9 +640,6 @@ final class DefaultSearchContext extends SearchContext {
         return this.originalQuery;
     }
 
-    /**
-     * The query to execute, in its rewritten form.
-     */
     @Override
     public Query query() {
         return this.query;
@@ -655,14 +730,8 @@ final class DefaultSearchContext extends SearchContext {
     }
 
     @Override
-    public int docIdsToLoadSize() {
-        return docsIdsToLoadSize;
-    }
-
-    @Override
-    public SearchContext docIdsToLoad(int[] docIdsToLoad, int docsIdsToLoadSize) {
+    public SearchContext docIdsToLoad(int[] docIdsToLoad) {
         this.docIdsToLoad = docIdsToLoad;
-        this.docsIdsToLoadSize = docsIdsToLoadSize;
         return this;
     }
 
@@ -674,6 +743,26 @@ final class DefaultSearchContext extends SearchContext {
     @Override
     public QuerySearchResult queryResult() {
         return queryResult;
+    }
+
+    public void addQuerySearchResultReleasable(Releasable releasable) {
+        queryResult.addReleasable(releasable);
+    }
+
+    @Override
+    public TotalHits getTotalHits() {
+        if (queryResult != null) {
+            return queryResult.getTotalHits();
+        }
+        return null;
+    }
+
+    @Override
+    public float getMaxScore() {
+        if (queryResult != null) {
+            return queryResult.getMaxScore();
+        }
+        return Float.NaN;
     }
 
     @Override
@@ -689,11 +778,6 @@ final class DefaultSearchContext extends SearchContext {
     @Override
     public long getRelativeTimeInMillis() {
         return relativeTimeSupplier.getAsLong();
-    }
-
-    @Override
-    public Map<Class<?>, Collector> queryCollectors() {
-        return queryCollectors;
     }
 
     @Override
@@ -728,5 +812,20 @@ final class DefaultSearchContext extends SearchContext {
     @Override
     public ReaderContext readerContext() {
         return readerContext;
+    }
+
+    @Override
+    public SourceLoader newSourceLoader() {
+        return searchExecutionContext.newSourceLoader(request.isForceSyntheticSource());
+    }
+
+    @Override
+    public IdLoader newIdLoader() {
+        if (indexService.getIndexSettings().getMode() == IndexMode.TIME_SERIES) {
+            var indexRouting = (IndexRouting.ExtractFromSource) indexService.getIndexSettings().getIndexRouting();
+            return IdLoader.createTsIdLoader(indexRouting, indexService.getMetadata().getRoutingPaths());
+        } else {
+            return IdLoader.fromLeafStoredFieldLoader();
+        }
     }
 }

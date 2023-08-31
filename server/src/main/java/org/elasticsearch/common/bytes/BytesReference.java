@@ -14,15 +14,14 @@ import org.apache.lucene.util.BytesRefIterator;
 import org.elasticsearch.common.io.stream.BytesStream;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.util.ByteArray;
-import org.elasticsearch.common.xcontent.ToXContentFragment;
-import org.elasticsearch.common.xcontent.XContentBuilder;
+import org.elasticsearch.xcontent.ToXContentFragment;
+import org.elasticsearch.xcontent.XContentBuilder;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
-
 
 /**
  * A reference to bytes.
@@ -66,7 +65,7 @@ public interface BytesReference extends Comparable<BytesReference>, ToXContentFr
             while ((r = byteRefIterator.next()) != null) {
                 buffers.add(ByteBuffer.wrap(r.bytes, r.offset, r.length));
             }
-            return buffers.toArray(new ByteBuffer[buffers.size()]);
+            return buffers.toArray(ByteBuffer[]::new);
 
         } catch (IOException e) {
             // this is really an error since we don't do IO in our bytesreferences
@@ -124,6 +123,21 @@ public interface BytesReference extends Comparable<BytesReference>, ToXContentFr
      * Returns the integer read from the 4 bytes (BE) starting at the given index.
      */
     int getInt(int index);
+
+    /**
+     * Returns the integer read from the 4 bytes (LE) starting at the given index.
+     */
+    int getIntLE(int index);
+
+    /**
+     * Returns the long read from the 8 bytes (LE) starting at the given index.
+     */
+    long getLongLE(int index);
+
+    /**
+     * Returns the double read from the 8 bytes (LE) starting at the given index.
+     */
+    double getDoubleLE(int index);
 
     /**
      * Finds the index of the first occurrence of the given marker between within the given bounds.

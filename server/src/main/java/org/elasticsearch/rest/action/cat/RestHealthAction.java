@@ -10,10 +10,12 @@ package org.elasticsearch.rest.action.cat;
 
 import org.elasticsearch.action.admin.cluster.health.ClusterHealthRequest;
 import org.elasticsearch.action.admin.cluster.health.ClusterHealthResponse;
-import org.elasticsearch.client.node.NodeClient;
+import org.elasticsearch.client.internal.node.NodeClient;
 import org.elasticsearch.common.Table;
 import org.elasticsearch.rest.RestRequest;
 import org.elasticsearch.rest.RestResponse;
+import org.elasticsearch.rest.Scope;
+import org.elasticsearch.rest.ServerlessScope;
 import org.elasticsearch.rest.action.RestResponseListener;
 
 import java.util.List;
@@ -21,6 +23,7 @@ import java.util.Locale;
 
 import static org.elasticsearch.rest.RestRequest.Method.GET;
 
+@ServerlessScope(Scope.INTERNAL)
 public class RestHealthAction extends AbstractCatAction {
 
     @Override
@@ -42,7 +45,6 @@ public class RestHealthAction extends AbstractCatAction {
     protected void documentation(StringBuilder sb) {
         sb.append("/_cat/health\n");
     }
-
 
     @Override
     public RestChannelConsumer doCatRequest(final RestRequest request, final NodeClient client) {

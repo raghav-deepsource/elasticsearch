@@ -10,13 +10,13 @@ import org.elasticsearch.action.ActionRequest;
 import org.elasticsearch.action.ActionRequestValidationException;
 import org.elasticsearch.action.ActionResponse;
 import org.elasticsearch.action.ActionType;
-import org.elasticsearch.common.ParseField;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
-import org.elasticsearch.common.xcontent.ObjectParser;
-import org.elasticsearch.common.xcontent.ToXContentObject;
-import org.elasticsearch.common.xcontent.XContentBuilder;
-import org.elasticsearch.common.xcontent.XContentParser;
+import org.elasticsearch.xcontent.ObjectParser;
+import org.elasticsearch.xcontent.ParseField;
+import org.elasticsearch.xcontent.ToXContentObject;
+import org.elasticsearch.xcontent.XContentBuilder;
+import org.elasticsearch.xcontent.XContentParser;
 import org.elasticsearch.xpack.core.ml.calendars.Calendar;
 import org.elasticsearch.xpack.core.ml.calendars.ScheduledEvent;
 import org.elasticsearch.xpack.core.ml.job.messages.Messages;
@@ -51,8 +51,9 @@ public class PostCalendarEventsAction extends ActionType<PostCalendarEventsActio
 
             for (ScheduledEvent.Builder event : events) {
                 if (event.getCalendarId() != null && event.getCalendarId().equals(calendarId) == false) {
-                    throw ExceptionsHelper.badRequestException(Messages.getMessage(Messages.INCONSISTENT_ID,
-                            Calendar.ID.getPreferredName(), event.getCalendarId(), calendarId));
+                    throw ExceptionsHelper.badRequestException(
+                        Messages.getMessage(Messages.INCONSISTENT_ID, Calendar.ID.getPreferredName(), event.getCalendarId(), calendarId)
+                    );
                 }
                 // Set the calendar Id in case it is null
                 event.calendarId(calendarId);
@@ -96,7 +97,7 @@ public class PostCalendarEventsAction extends ActionType<PostCalendarEventsActio
         public void writeTo(StreamOutput out) throws IOException {
             super.writeTo(out);
             out.writeString(calendarId);
-            out.writeList(scheduledEvents);
+            out.writeCollection(scheduledEvents);
         }
 
         @Override
@@ -132,7 +133,7 @@ public class PostCalendarEventsAction extends ActionType<PostCalendarEventsActio
 
         @Override
         public void writeTo(StreamOutput out) throws IOException {
-            out.writeList(scheduledEvents);
+            out.writeCollection(scheduledEvents);
         }
 
         @Override

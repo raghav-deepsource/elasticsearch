@@ -7,10 +7,10 @@
 package org.elasticsearch.xpack.rollup.rest;
 
 import org.elasticsearch.action.search.SearchRequest;
-import org.elasticsearch.client.node.NodeClient;
+import org.elasticsearch.client.internal.node.NodeClient;
 import org.elasticsearch.rest.BaseRestHandler;
 import org.elasticsearch.rest.RestRequest;
-import org.elasticsearch.rest.action.RestToXContentListener;
+import org.elasticsearch.rest.action.RestChunkedToXContentListener;
 import org.elasticsearch.rest.action.search.RestSearchAction;
 import org.elasticsearch.xpack.core.rollup.action.RollupSearchAction;
 
@@ -31,17 +31,24 @@ public class RestRollupSearchAction extends BaseRestHandler {
             new Route(GET, "_rollup_search"),
             new Route(POST, "_rollup_search"),
             new Route(GET, "{index}/_rollup_search"),
-            new Route(POST, "{index}/_rollup_search"));
+            new Route(POST, "{index}/_rollup_search")
+        );
     }
 
     @Override
     protected RestChannelConsumer prepareRequest(RestRequest restRequest, NodeClient client) throws IOException {
         SearchRequest searchRequest = new SearchRequest();
-        restRequest.withContentOrSourceParamParserOrNull(parser ->
-            RestSearchAction.parseSearchRequest(searchRequest, restRequest, parser,
-                    client.getNamedWriteableRegistry(), size -> searchRequest.source().size(size)));
-        RestSearchAction.checkRestTotalHits(restRequest, searchRequest);
-        return channel -> client.execute(RollupSearchAction.INSTANCE, searchRequest, new RestToXContentListener<>(channel));
+        restRequest.withContentOrSourceParamParserOrNull(
+            parser -> RestSearchAction.parseSearchRequest(
+                searchRequest,
+                restRequest,
+                parser,
+                client.getNamedWriteableRegistry(),
+                size -> searchRequest.source().size(size)
+            )
+        );
+        RestSearchAction.validateSearchRequest(restRequest, searchRequest);
+        return channel -> client.execute(RollupSearchAction.INSTANCE, searchRequest, new RestChunkedToXContentListener<>(channel));
     }
 
     @Override

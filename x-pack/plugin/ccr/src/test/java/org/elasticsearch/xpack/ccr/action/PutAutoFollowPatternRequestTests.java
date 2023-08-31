@@ -8,10 +8,10 @@ package org.elasticsearch.xpack.ccr.action;
 
 import org.elasticsearch.action.ActionRequestValidationException;
 import org.elasticsearch.common.io.stream.Writeable;
-import org.elasticsearch.common.unit.TimeValue;
-import org.elasticsearch.common.xcontent.XContentParser;
-import org.elasticsearch.common.xcontent.XContentType;
-import org.elasticsearch.test.AbstractSerializingTestCase;
+import org.elasticsearch.core.TimeValue;
+import org.elasticsearch.test.AbstractXContentSerializingTestCase;
+import org.elasticsearch.xcontent.XContentParser;
+import org.elasticsearch.xcontent.XContentType;
 import org.elasticsearch.xpack.core.ccr.action.PutAutoFollowPatternAction;
 
 import java.io.IOException;
@@ -22,12 +22,7 @@ import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.nullValue;
 
-public class PutAutoFollowPatternRequestTests extends AbstractSerializingTestCase<PutAutoFollowPatternAction.Request> {
-
-    @Override
-    protected boolean supportsUnknownFields() {
-        return false;
-    }
+public class PutAutoFollowPatternRequestTests extends AbstractXContentSerializingTestCase<PutAutoFollowPatternAction.Request> {
 
     @Override
     protected PutAutoFollowPatternAction.Request doParseInstance(XContentParser parser) throws IOException {
@@ -49,8 +44,18 @@ public class PutAutoFollowPatternRequestTests extends AbstractSerializingTestCas
         if (randomBoolean()) {
             request.setFollowIndexNamePattern(randomAlphaOfLength(4));
         }
+        if (randomBoolean()) {
+            request.setLeaderIndexExclusionPatterns(
+                Arrays.asList(generateRandomStringArray(randomIntBetween(1, 10), randomIntBetween(1, 20), false))
+            );
+        }
         ResumeFollowActionRequestTests.generateFollowParameters(request.getParameters());
         return request;
+    }
+
+    @Override
+    protected PutAutoFollowPatternAction.Request mutateInstance(PutAutoFollowPatternAction.Request instance) {
+        return null;// TODO implement https://github.com/elastic/elasticsearch/issues/25929
     }
 
     @Override
@@ -62,6 +67,11 @@ public class PutAutoFollowPatternRequestTests extends AbstractSerializingTestCas
         request.setLeaderIndexPatterns(Arrays.asList(generateRandomStringArray(4, 4, false)));
         if (randomBoolean()) {
             request.setFollowIndexNamePattern(randomAlphaOfLength(4));
+        }
+        if (randomBoolean()) {
+            request.setLeaderIndexExclusionPatterns(
+                Arrays.asList(generateRandomStringArray(randomIntBetween(1, 10), randomIntBetween(1, 20), false))
+            );
         }
         ResumeFollowActionRequestTests.generateFollowParameters(request.getParameters());
         return request;

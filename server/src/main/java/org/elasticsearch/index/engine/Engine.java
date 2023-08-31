@@ -9,11 +9,14 @@
 package org.elasticsearch.index.engine;
 
 import org.apache.logging.log4j.Logger;
-import org.apache.logging.log4j.message.ParameterizedMessage;
+import org.apache.lucene.index.ByteVectorValues;
 import org.apache.lucene.index.DirectoryReader;
+import org.apache.lucene.index.FieldInfo;
+import org.apache.lucene.index.FloatVectorValues;
 import org.apache.lucene.index.IndexCommit;
 import org.apache.lucene.index.IndexFileNames;
 import org.apache.lucene.index.IndexReader;
+import org.apache.lucene.index.LeafReader;
 import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.SegmentCommitInfo;
 import org.apache.lucene.index.SegmentInfos;
@@ -25,19 +28,12 @@ import org.apache.lucene.search.QueryCachingPolicy;
 import org.apache.lucene.search.ReferenceManager;
 import org.apache.lucene.search.similarities.Similarity;
 import org.apache.lucene.store.AlreadyClosedException;
-import org.apache.lucene.store.Directory;
-import org.apache.lucene.store.IOContext;
-import org.apache.lucene.util.Accountable;
-import org.apache.lucene.util.Accountables;
 import org.apache.lucene.util.SetOnce;
 import org.elasticsearch.ExceptionsHelper;
+import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.index.IndexRequest;
-import org.elasticsearch.common.CheckedRunnable;
-import org.elasticsearch.common.Nullable;
+import org.elasticsearch.action.support.PlainActionFuture;
 import org.elasticsearch.common.bytes.BytesReference;
-import org.elasticsearch.common.collect.ImmutableOpenMap;
-import org.elasticsearch.common.lease.Releasable;
-import org.elasticsearch.common.lease.Releasables;
 import org.elasticsearch.common.logging.Loggers;
 import org.elasticsearch.common.lucene.Lucene;
 import org.elasticsearch.common.lucene.index.ElasticsearchDirectoryReader;
@@ -45,18 +41,26 @@ import org.elasticsearch.common.lucene.uid.Versions;
 import org.elasticsearch.common.lucene.uid.VersionsAndSeqNoResolver;
 import org.elasticsearch.common.lucene.uid.VersionsAndSeqNoResolver.DocIdAndVersion;
 import org.elasticsearch.common.metrics.CounterMetric;
-import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.common.util.concurrent.ReleasableLock;
+import org.elasticsearch.common.util.concurrent.UncategorizedExecutionException;
+import org.elasticsearch.core.CheckedRunnable;
+import org.elasticsearch.core.Nullable;
+import org.elasticsearch.core.Releasable;
+import org.elasticsearch.core.Releasables;
+import org.elasticsearch.core.TimeValue;
+import org.elasticsearch.index.IndexVersion;
 import org.elasticsearch.index.VersionType;
-import org.elasticsearch.index.mapper.DocumentMapper;
+import org.elasticsearch.index.mapper.DocumentParser;
 import org.elasticsearch.index.mapper.IdFieldMapper;
+import org.elasticsearch.index.mapper.LuceneDocument;
 import org.elasticsearch.index.mapper.Mapping;
-import org.elasticsearch.index.mapper.ParseContext.Document;
+import org.elasticsearch.index.mapper.MappingLookup;
 import org.elasticsearch.index.mapper.ParsedDocument;
 import org.elasticsearch.index.mapper.Uid;
 import org.elasticsearch.index.merge.MergeStats;
 import org.elasticsearch.index.seqno.SeqNoStats;
 import org.elasticsearch.index.seqno.SequenceNumbers;
+import org.elasticsearch.index.shard.DenseVectorStats;
 import org.elasticsearch.index.shard.DocsStats;
 import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.index.shard.ShardLongFieldRange;
@@ -64,13 +68,13 @@ import org.elasticsearch.index.store.Store;
 import org.elasticsearch.index.translog.Translog;
 import org.elasticsearch.index.translog.TranslogStats;
 import org.elasticsearch.search.suggest.completion.CompletionStats;
+import org.elasticsearch.transport.Transports;
 
 import java.io.Closeable;
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.nio.file.NoSuchFileException;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -80,15 +84,17 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.function.Consumer;
 import java.util.function.Function;
-import java.util.stream.Stream;
 
+import static org.elasticsearch.core.Strings.format;
 import static org.elasticsearch.index.seqno.SequenceNumbers.UNASSIGNED_PRIMARY_TERM;
 import static org.elasticsearch.index.seqno.SequenceNumbers.UNASSIGNED_SEQ_NO;
 
@@ -99,8 +105,12 @@ public abstract class Engine implements Closeable {
     public static final String FORCE_MERGE_UUID_KEY = "force_merge_uuid";
     public static final String MIN_RETAINED_SEQNO = "min_retained_seq_no";
     public static final String MAX_UNSAFE_AUTO_ID_TIMESTAMP_COMMIT_ID = "max_unsafe_auto_id_timestamp";
+    // Field name that stores the Elasticsearch version in Lucene commit user data, representing
+    // the version that was used to write the commit (and thus a max version for the underlying segments).
+    public static final String ES_VERSION = "es_version";
     public static final String SEARCH_SOURCE = "search"; // TODO: Make source of search enum?
     public static final String CAN_MATCH_SEARCH_SOURCE = "can_match";
+    protected static final String DOC_STATS_SOURCE = "doc_stats";
 
     protected final ShardId shardId;
     protected final Logger logger;
@@ -134,24 +144,29 @@ public abstract class Engine implements Closeable {
         this.shardId = engineConfig.getShardId();
         this.store = engineConfig.getStore();
         // we use the engine class directly here to make sure all subclasses have the same logger name
-        this.logger = Loggers.getLogger(Engine.class,
-                engineConfig.getShardId());
+        this.logger = Loggers.getLogger(Engine.class, engineConfig.getShardId());
         this.eventListener = engineConfig.getEventListener();
     }
 
-    /** Returns 0 in the case where accountable is null, otherwise returns {@code ramBytesUsed()} */
-    protected static long guardedRamBytesUsed(Accountable a) {
-        if (a == null) {
-            return 0;
+    /**
+     * Reads an {@code IndexVersion} from an {@code es_version} metadata string
+     */
+    public static IndexVersion readIndexVersion(String esVersion) {
+        if (esVersion.contains(".")) {
+            // backwards-compatible Version-style
+            org.elasticsearch.Version v = org.elasticsearch.Version.fromString(esVersion);
+            assert v.onOrBefore(org.elasticsearch.Version.V_8_11_0);
+            return IndexVersion.fromId(v.id);
+        } else {
+            return IndexVersion.fromId(Integer.parseInt(esVersion));
         }
-        return a.ramBytesUsed();
     }
 
     public final EngineConfig config() {
         return engineConfig;
     }
 
-    protected abstract SegmentInfos getLastCommittedSegmentInfos();
+    public abstract SegmentInfos getLastCommittedSegmentInfos();
 
     public MergeStats getMergeStats() {
         return new MergeStats();
@@ -177,8 +192,8 @@ public abstract class Engine implements Closeable {
         // index.refresh_interval=-1 won't see any doc stats updates at all. This change will give more accurate statistics
         // when indexing but not refreshing in general. Yet, if a refresh happens the internal searcher is refresh as well so we are
         // safe here.
-        try (Searcher searcher = acquireSearcher("docStats", SearcherScope.INTERNAL)) {
-           return docsStats(searcher.getIndexReader());
+        try (Searcher searcher = acquireSearcher(DOC_STATS_SOURCE, SearcherScope.INTERNAL)) {
+            return docsStats(searcher.getIndexReader());
         }
     }
 
@@ -197,10 +212,52 @@ public abstract class Engine implements Closeable {
             try {
                 sizeInBytes += info.sizeInBytes();
             } catch (IOException e) {
-                logger.trace(() -> new ParameterizedMessage("failed to get size for [{}]", info.info.name), e);
+                logger.trace(() -> "failed to get size for [" + info.info.name + "]", e);
             }
         }
         return new DocsStats(numDocs, numDeletedDocs, sizeInBytes);
+    }
+
+    /**
+     * Returns the {@link DenseVectorStats} for this engine
+     */
+    public DenseVectorStats denseVectorStats() {
+        try (Searcher searcher = acquireSearcher(DOC_STATS_SOURCE, SearcherScope.INTERNAL)) {
+            return denseVectorStats(searcher.getIndexReader());
+        }
+    }
+
+    protected final DenseVectorStats denseVectorStats(IndexReader indexReader) {
+        long valueCount = 0;
+        // we don't wait for a pending refreshes here since it's a stats call instead we mark it as accessed only which will cause
+        // the next scheduled refresh to go through and refresh the stats as well
+        for (LeafReaderContext readerContext : indexReader.leaves()) {
+            try {
+                valueCount += getDenseVectorValueCount(readerContext.reader());
+            } catch (IOException e) {
+                logger.trace(() -> "failed to get dense vector stats for [" + readerContext + "]", e);
+            }
+        }
+        return new DenseVectorStats(valueCount);
+    }
+
+    private long getDenseVectorValueCount(final LeafReader atomicReader) throws IOException {
+        long count = 0;
+        for (FieldInfo info : atomicReader.getFieldInfos()) {
+            if (info.getVectorDimension() > 0) {
+                switch (info.getVectorEncoding()) {
+                    case FLOAT32 -> {
+                        FloatVectorValues values = atomicReader.getFloatVectorValues(info.name);
+                        count += values != null ? values.size() : 0;
+                    }
+                    case BYTE -> {
+                        ByteVectorValues values = atomicReader.getByteVectorValues(info.name);
+                        count += values != null ? values.size() : 0;
+                    }
+                }
+            }
+        }
+        return count;
     }
 
     /**
@@ -212,9 +269,42 @@ public abstract class Engine implements Closeable {
         final long globalCheckpoint = engineConfig.getGlobalCheckpointSupplier().getAsLong();
         final long maxSeqNo = getSeqNoStats(globalCheckpoint).getMaxSeqNo();
         if (globalCheckpoint != maxSeqNo) {
-            throw new IllegalStateException("Global checkpoint [" + globalCheckpoint
-                + "] mismatches maximum sequence number [" + maxSeqNo + "] on index shard " + shardId);
+            throw new IllegalStateException(
+                "Global checkpoint ["
+                    + globalCheckpoint
+                    + "] mismatches maximum sequence number ["
+                    + maxSeqNo
+                    + "] on index shard "
+                    + shardId
+            );
         }
+    }
+
+    public interface IndexCommitListener {
+
+        /**
+         * This method is invoked each time a new Lucene commit is created through this engine. There is no guarantee that a listener will
+         * be notified of the commits in order, ie newer commits may appear before older ones. The {@link IndexCommitRef} prevents the
+         * {@link IndexCommitRef} files to be deleted from disk until the reference is closed. As such, the listener must close the
+         * reference as soon as it is done with it.
+         *
+         * @param shardId         the {@link ShardId} of shard
+         * @param store           the index shard store
+         * @param primaryTerm     the shard's primary term value
+         * @param indexCommitRef  a reference on the newly created index commit
+         * @param additionalFiles the set of filenames that are added by the new commit
+         */
+        void onNewCommit(ShardId shardId, Store store, long primaryTerm, IndexCommitRef indexCommitRef, Set<String> additionalFiles);
+
+        /**
+         * This method is invoked after the policy deleted the given {@link IndexCommit}. A listener is never notified of a deleted commit
+         * until the corresponding {@link Engine.IndexCommitRef} received through {@link #onNewCommit} has been closed; closing which in
+         * turn can call this method directly.
+         *
+         * @param shardId the {@link ShardId} of shard
+         * @param deletedCommit the deleted {@link IndexCommit}
+         */
+        void onIndexCommitDelete(ShardId shardId, IndexCommit deletedCommit);
     }
 
     /**
@@ -257,7 +347,7 @@ public abstract class Engine implements Closeable {
         long getThrottleTimeInMillis() {
             long currentThrottleNS = 0;
             if (isThrottled() && startOfThrottleNS != 0) {
-                currentThrottleNS +=  System.nanoTime() - startOfThrottleNS;
+                currentThrottleNS += System.nanoTime() - startOfThrottleNS;
                 if (currentThrottleNS < 0) {
                     // Paranoia (System.nanoTime() is supposed to be monotonic): time slip must have happened, have to ignore this value
                     currentThrottleNS = 0;
@@ -271,7 +361,7 @@ public abstract class Engine implements Closeable {
         }
 
         boolean throttleLockIsHeldByCurrentThread() { // to be used in assertions and tests only
-            if(isThrottled()) {
+            if (isThrottled()) {
                 return lock.isHeldByCurrentThread();
             }
             return false;
@@ -285,12 +375,14 @@ public abstract class Engine implements Closeable {
 
     /**
      * Returns the <code>true</code> iff this engine is currently under index throttling.
+     *
      * @see #getIndexThrottleTimeInMillis()
      */
     public abstract boolean isThrottled();
 
     /**
      * Trims translog for terms below <code>belowTerm</code> and seq# above <code>aboveSeqNo</code>
+     *
      * @see Translog#trimOperations(long, long)
      */
     public abstract void trimOperationsFromTranslog(long belowTerm, long aboveSeqNo) throws EngineException;
@@ -299,12 +391,10 @@ public abstract class Engine implements Closeable {
     protected static final class NoOpLock implements Lock {
 
         @Override
-        public void lock() {
-        }
+        public void lock() {}
 
         @Override
-        public void lockInterruptibly() throws InterruptedException {
-        }
+        public void lockInterruptibly() throws InterruptedException {}
 
         @Override
         public boolean tryLock() {
@@ -317,8 +407,7 @@ public abstract class Engine implements Closeable {
         }
 
         @Override
-        public void unlock() {
-        }
+        public void unlock() {}
 
         @Override
         public Condition newCondition() {
@@ -362,10 +451,11 @@ public abstract class Engine implements Closeable {
         private final Exception failure;
         private final SetOnce<Boolean> freeze = new SetOnce<>();
         private final Mapping requiredMappingUpdate;
+        private final String id;
         private Translog.Location translogLocation;
         private long took;
 
-        protected Result(Operation.TYPE operationType, Exception failure, long version, long term, long seqNo) {
+        protected Result(Operation.TYPE operationType, Exception failure, long version, long term, long seqNo, String id) {
             this.operationType = operationType;
             this.failure = Objects.requireNonNull(failure);
             this.version = version;
@@ -373,9 +463,10 @@ public abstract class Engine implements Closeable {
             this.seqNo = seqNo;
             this.requiredMappingUpdate = null;
             this.resultType = Type.FAILURE;
+            this.id = id;
         }
 
-        protected Result(Operation.TYPE operationType, long version, long term, long seqNo) {
+        protected Result(Operation.TYPE operationType, long version, long term, long seqNo, String id) {
             this.operationType = operationType;
             this.version = version;
             this.seqNo = seqNo;
@@ -383,9 +474,10 @@ public abstract class Engine implements Closeable {
             this.failure = null;
             this.requiredMappingUpdate = null;
             this.resultType = Type.SUCCESS;
+            this.id = id;
         }
 
-        protected Result(Operation.TYPE operationType, Mapping requiredMappingUpdate) {
+        protected Result(Operation.TYPE operationType, Mapping requiredMappingUpdate, String id) {
             this.operationType = operationType;
             this.version = Versions.NOT_FOUND;
             this.seqNo = UNASSIGNED_SEQ_NO;
@@ -393,6 +485,7 @@ public abstract class Engine implements Closeable {
             this.failure = null;
             this.requiredMappingUpdate = requiredMappingUpdate;
             this.resultType = Type.MAPPING_UPDATE_REQUIRED;
+            this.id = id;
         }
 
         /** whether the operation was successful, has failed or was aborted due to a mapping update */
@@ -445,6 +538,10 @@ public abstract class Engine implements Closeable {
             return operationType;
         }
 
+        public String getId() {
+            return id;
+        }
+
         void setTranslogLocation(Translog.Location translogLocation) {
             if (freeze.get() == null) {
                 this.translogLocation = translogLocation;
@@ -476,57 +573,56 @@ public abstract class Engine implements Closeable {
 
         private final boolean created;
 
-        public IndexResult(long version, long term, long seqNo, boolean created) {
-            super(Operation.TYPE.INDEX, version, term, seqNo);
+        public IndexResult(long version, long term, long seqNo, boolean created, String id) {
+            super(Operation.TYPE.INDEX, version, term, seqNo, id);
             this.created = created;
         }
 
         /**
          * use in case of the index operation failed before getting to internal engine
          **/
-        public IndexResult(Exception failure, long version) {
-            this(failure, version, UNASSIGNED_PRIMARY_TERM, UNASSIGNED_SEQ_NO);
+        public IndexResult(Exception failure, long version, String id) {
+            this(failure, version, UNASSIGNED_PRIMARY_TERM, UNASSIGNED_SEQ_NO, id);
         }
 
-        public IndexResult(Exception failure, long version, long term, long seqNo) {
-            super(Operation.TYPE.INDEX, failure, version, term, seqNo);
+        public IndexResult(Exception failure, long version, long term, long seqNo, String id) {
+            super(Operation.TYPE.INDEX, failure, version, term, seqNo, id);
             this.created = false;
         }
 
-        public IndexResult(Mapping requiredMappingUpdate) {
-            super(Operation.TYPE.INDEX, requiredMappingUpdate);
+        public IndexResult(Mapping requiredMappingUpdate, String id) {
+            super(Operation.TYPE.INDEX, requiredMappingUpdate, id);
             this.created = false;
         }
 
         public boolean isCreated() {
             return created;
         }
-
     }
 
     public static class DeleteResult extends Result {
 
         private final boolean found;
 
-        public DeleteResult(long version, long term, long seqNo, boolean found) {
-            super(Operation.TYPE.DELETE, version, term, seqNo);
+        public DeleteResult(long version, long term, long seqNo, boolean found, String id) {
+            super(Operation.TYPE.DELETE, version, term, seqNo, id);
             this.found = found;
         }
 
         /**
          * use in case of the delete operation failed before getting to internal engine
          **/
-        public DeleteResult(Exception failure, long version, long term) {
-            this(failure, version, term, UNASSIGNED_SEQ_NO, false);
+        public DeleteResult(Exception failure, long version, long term, String id) {
+            this(failure, version, term, UNASSIGNED_SEQ_NO, false, id);
         }
 
-        public DeleteResult(Exception failure, long version, long term, long seqNo, boolean found) {
-            super(Operation.TYPE.DELETE, failure, version, term, seqNo);
+        public DeleteResult(Exception failure, long version, long term, long seqNo, boolean found, String id) {
+            super(Operation.TYPE.DELETE, failure, version, term, seqNo, id);
             this.found = found;
         }
 
-        public DeleteResult(Mapping requiredMappingUpdate) {
-            super(Operation.TYPE.DELETE, requiredMappingUpdate);
+        public DeleteResult(Mapping requiredMappingUpdate, String id) {
+            super(Operation.TYPE.DELETE, requiredMappingUpdate, id);
             this.found = false;
         }
 
@@ -538,52 +634,82 @@ public abstract class Engine implements Closeable {
 
     public static class NoOpResult extends Result {
 
-        NoOpResult(long term, long seqNo) {
-            super(Operation.TYPE.NO_OP, 0, term, seqNo);
+        public NoOpResult(long term, long seqNo) {
+            super(Operation.TYPE.NO_OP, 0, term, seqNo, null);
         }
 
         NoOpResult(long term, long seqNo, Exception failure) {
-            super(Operation.TYPE.NO_OP, failure, 0, term, seqNo);
+            super(Operation.TYPE.NO_OP, failure, 0, term, seqNo, null);
         }
 
     }
 
-    protected final GetResult getFromSearcher(Get get, Engine.Searcher searcher) throws EngineException {
+    protected final GetResult getFromSearcher(Get get, Engine.Searcher searcher, boolean uncachedLookup) throws EngineException {
         final DocIdAndVersion docIdAndVersion;
         try {
-            docIdAndVersion = VersionsAndSeqNoResolver.loadDocIdAndVersion(searcher.getIndexReader(), get.uid(), true);
+            if (uncachedLookup) {
+                docIdAndVersion = VersionsAndSeqNoResolver.loadDocIdAndVersionUncached(searcher.getIndexReader(), get.uid(), true);
+            } else {
+                docIdAndVersion = VersionsAndSeqNoResolver.timeSeriesLoadDocIdAndVersion(searcher.getIndexReader(), get.uid(), true);
+            }
         } catch (Exception e) {
             Releasables.closeWhileHandlingException(searcher);
-            //TODO: A better exception goes here
+            // TODO: A better exception goes here
             throw new EngineException(shardId, "Couldn't resolve version", e);
         }
 
         if (docIdAndVersion != null) {
             if (get.versionType().isVersionConflictForReads(docIdAndVersion.version, get.version())) {
                 Releasables.close(searcher);
-                throw new VersionConflictEngineException(shardId, get.id(),
-                        get.versionType().explainConflictForReads(docIdAndVersion.version, get.version()));
+                throw new VersionConflictEngineException(
+                    shardId,
+                    "[" + get.id() + "]",
+                    get.versionType().explainConflictForReads(docIdAndVersion.version, get.version())
+                );
             }
-            if (get.getIfSeqNo() != SequenceNumbers.UNASSIGNED_SEQ_NO && (
-                get.getIfSeqNo() != docIdAndVersion.seqNo || get.getIfPrimaryTerm() != docIdAndVersion.primaryTerm
-            )) {
+            if (get.getIfSeqNo() != SequenceNumbers.UNASSIGNED_SEQ_NO
+                && (get.getIfSeqNo() != docIdAndVersion.seqNo || get.getIfPrimaryTerm() != docIdAndVersion.primaryTerm)) {
                 Releasables.close(searcher);
-                throw new VersionConflictEngineException(shardId, get.id(),
-                    get.getIfSeqNo(), get.getIfPrimaryTerm(), docIdAndVersion.seqNo, docIdAndVersion.primaryTerm);
+                throw new VersionConflictEngineException(
+                    shardId,
+                    get.id(),
+                    get.getIfSeqNo(),
+                    get.getIfPrimaryTerm(),
+                    docIdAndVersion.seqNo,
+                    docIdAndVersion.primaryTerm
+                );
             }
         }
 
         if (docIdAndVersion != null) {
             // don't release the searcher on this path, it is the
             // responsibility of the caller to call GetResult.release
-            return new GetResult(searcher, docIdAndVersion, false);
+            return new GetResult(searcher, docIdAndVersion);
         } else {
             Releasables.close(searcher);
             return GetResult.NOT_EXISTS;
         }
     }
 
-    public abstract GetResult get(Get get, DocumentMapper mapper, Function<Engine.Searcher, Engine.Searcher> searcherWrapper);
+    public abstract GetResult get(
+        Get get,
+        MappingLookup mappingLookup,
+        DocumentParser documentParser,
+        Function<Engine.Searcher, Engine.Searcher> searcherWrapper
+    );
+
+    /**
+     * Similar to {@link Engine#get}, but it only attempts to serve the get from the translog.
+     * If not found in translog, it returns null, as {@link GetResult#NOT_EXISTS} could mean deletion.
+     */
+    public GetResult getFromTranslog(
+        Get get,
+        MappingLookup mappingLookup,
+        DocumentParser documentParser,
+        Function<Engine.Searcher, Engine.Searcher> searcherWrapper
+    ) {
+        throw new UnsupportedOperationException();
+    }
 
     /**
      * Acquires a point-in-time reader that can be used to create {@link Engine.Searcher}s on demand.
@@ -610,8 +736,14 @@ public abstract class Engine implements Closeable {
                 @Override
                 public Searcher acquireSearcherInternal(String source) {
                     assert assertSearcherIsWarmedUp(source, scope);
-                    return new Searcher(source, acquire, engineConfig.getSimilarity(), engineConfig.getQueryCache(),
-                        engineConfig.getQueryCachingPolicy(), () -> {});
+                    return new Searcher(
+                        source,
+                        acquire,
+                        engineConfig.getSimilarity(),
+                        engineConfig.getQueryCache(),
+                        engineConfig.getQueryCachingPolicy(),
+                        () -> {}
+                    );
                 }
 
                 @Override
@@ -635,7 +767,7 @@ public abstract class Engine implements Closeable {
         } catch (Exception ex) {
             maybeFailEngine("acquire_reader", ex);
             ensureOpen(ex); // throw EngineCloseException here if we are already closed
-            logger.error(() -> new ParameterizedMessage("failed to acquire reader"), ex);
+            logger.error("failed to acquire reader", ex);
             throw new EngineException(shardId, "failed to acquire reader", ex);
         } finally {
             Releasables.close(releasable);
@@ -656,8 +788,14 @@ public abstract class Engine implements Closeable {
             SearcherSupplier reader = releasable = acquireSearcherSupplier(wrapper, scope);
             Searcher searcher = reader.acquireSearcher(source);
             releasable = null;
-            return new Searcher(source, searcher.getDirectoryReader(), searcher.getSimilarity(),
-                searcher.getQueryCache(), searcher.getQueryCachingPolicy(), () -> Releasables.close(searcher, reader));
+            return new Searcher(
+                source,
+                searcher.getDirectoryReader(),
+                searcher.getSimilarity(),
+                searcher.getQueryCache(),
+                searcher.getQueryCachingPolicy(),
+                () -> Releasables.close(searcher, reader)
+            );
         } finally {
             Releasables.close(releasable);
         }
@@ -670,7 +808,8 @@ public abstract class Engine implements Closeable {
     }
 
     public enum SearcherScope {
-        EXTERNAL, INTERNAL
+        EXTERNAL,
+        INTERNAL
     }
 
     /**
@@ -679,9 +818,21 @@ public abstract class Engine implements Closeable {
     public abstract boolean isTranslogSyncNeeded();
 
     /**
-     * Ensures that all locations in the given stream have been written to the underlying storage.
+     * Whether search idleness may be allowed to be considered for skipping a scheduled refresh.
      */
-    public abstract boolean ensureTranslogSynced(Stream<Translog.Location> locations) throws IOException;
+    public boolean allowSearchIdleOptimization() {
+        return true;
+    }
+
+    /**
+     * Ensures that the location has been written to the underlying storage.
+     */
+    public abstract void asyncEnsureTranslogSynced(Translog.Location location, Consumer<Exception> listener);
+
+    /**
+     * Ensures that the global checkpoint has been persisted to the underlying storage.
+     */
+    public abstract void asyncEnsureGlobalCheckpointSynced(long globalCheckpoint, Consumer<Exception> listener);
 
     public abstract void syncTranslog() throws IOException;
 
@@ -691,11 +842,27 @@ public abstract class Engine implements Closeable {
     public abstract Closeable acquireHistoryRetentionLock();
 
     /**
+     * Counts the number of operations in the range of the given sequence numbers.
+     *
+     * @param source    the source of the request
+     * @param fromSeqNo the start sequence number (inclusive)
+     * @param toSeqNo   the end sequence number (inclusive)
+     * @see #newChangesSnapshot(String, long, long, boolean, boolean, boolean)
+     */
+    public abstract int countChanges(String source, long fromSeqNo, long toSeqNo) throws IOException;
+
+    /**
      * Creates a new history snapshot from Lucene for reading operations whose seqno in the requesting seqno range (both inclusive).
      * This feature requires soft-deletes enabled. If soft-deletes are disabled, this method will throw an {@link IllegalStateException}.
      */
-    public abstract Translog.Snapshot newChangesSnapshot(String source, long fromSeqNo, long toSeqNo,
-                                                         boolean requiredFullRange, boolean singleConsumer) throws IOException;
+    public abstract Translog.Snapshot newChangesSnapshot(
+        String source,
+        long fromSeqNo,
+        long toSeqNo,
+        boolean requiredFullRange,
+        boolean singleConsumer,
+        boolean accessStats
+    ) throws IOException;
 
     /**
      * Checks if this engine has every operations since  {@code startingSeqNo}(inclusive) in its history (either Lucene or translog)
@@ -734,6 +901,16 @@ public abstract class Engine implements Closeable {
     public final CommitStats commitStats() {
         return new CommitStats(getLastCommittedSegmentInfos());
     }
+
+    /**
+     * @return the max issued or seen seqNo for this Engine
+     */
+    public abstract long getMaxSeqNo();
+
+    /**
+     * @return the processed local checkpoint for this Engine
+     */
+    public abstract long getProcessedLocalCheckpoint();
 
     /**
      * @return the persisted local checkpoint for this Engine
@@ -778,93 +955,42 @@ public abstract class Engine implements Closeable {
     }
 
     protected void fillSegmentStats(SegmentReader segmentReader, boolean includeSegmentFileSizes, SegmentsStats stats) {
-        stats.add(1, segmentReader.ramBytesUsed());
-        stats.addTermsMemoryInBytes(guardedRamBytesUsed(segmentReader.getPostingsReader()));
-        stats.addStoredFieldsMemoryInBytes(guardedRamBytesUsed(segmentReader.getFieldsReader()));
-        stats.addTermVectorsMemoryInBytes(guardedRamBytesUsed(segmentReader.getTermVectorsReader()));
-        stats.addNormsMemoryInBytes(guardedRamBytesUsed(segmentReader.getNormsReader()));
-        stats.addPointsMemoryInBytes(guardedRamBytesUsed(segmentReader.getPointsReader()));
-        stats.addDocValuesMemoryInBytes(guardedRamBytesUsed(segmentReader.getDocValuesReader()));
-
+        stats.add(1);
         if (includeSegmentFileSizes) {
-            // TODO: consider moving this to StoreStats
-            stats.addFileSizes(getSegmentFileSizes(segmentReader));
+            stats.addFiles(getSegmentFileSizes(segmentReader));
         }
     }
 
-    private ImmutableOpenMap<String, Long> getSegmentFileSizes(SegmentReader segmentReader) {
-        Directory directory = null;
-        SegmentCommitInfo segmentCommitInfo = segmentReader.getSegmentInfo();
-        boolean useCompoundFile = segmentCommitInfo.info.getUseCompoundFile();
-        if (useCompoundFile) {
-            try {
-                directory = engineConfig.getCodec().compoundFormat().getCompoundReader(segmentReader.directory(),
-                    segmentCommitInfo.info, IOContext.READ);
-            } catch (IOException e) {
-                logger.warn(() -> new ParameterizedMessage("Error when opening compound reader for Directory [{}] and " +
-                    "SegmentCommitInfo [{}]", segmentReader.directory(), segmentCommitInfo), e);
-
-                return ImmutableOpenMap.of();
+    private Map<String, SegmentsStats.FileStats> getSegmentFileSizes(SegmentReader segmentReader) {
+        try {
+            Map<String, SegmentsStats.FileStats> files = new HashMap<>();
+            final SegmentCommitInfo segmentCommitInfo = segmentReader.getSegmentInfo();
+            for (String fileName : segmentCommitInfo.files()) {
+                String fileExtension = IndexFileNames.getExtension(fileName);
+                if (fileExtension != null) {
+                    try {
+                        long fileLength = segmentReader.directory().fileLength(fileName);
+                        files.put(fileExtension, new SegmentsStats.FileStats(fileExtension, fileLength, 1L, fileLength, fileLength));
+                    } catch (IOException ioe) {
+                        logger.warn(() -> "Error when retrieving file length for [" + fileName + "]", ioe);
+                    } catch (AlreadyClosedException ace) {
+                        logger.warn(() -> "Error when retrieving file length for [" + fileName + "], directory is closed", ace);
+                        return Map.of();
+                    }
+                }
             }
-        } else {
-            directory = segmentReader.directory();
+            return Collections.unmodifiableMap(files);
+        } catch (IOException e) {
+            logger.warn(
+                () -> format(
+                    "Error when listing files for segment reader [%s] and segment info [%s]",
+                    segmentReader,
+                    segmentReader.getSegmentInfo()
+                ),
+                e
+            );
+            return Map.of();
         }
-
-        assert directory != null;
-
-        String[] files;
-        if (useCompoundFile) {
-            try {
-                files = directory.listAll();
-            } catch (IOException e) {
-                final Directory finalDirectory = directory;
-                logger.warn(() ->
-                    new ParameterizedMessage("Couldn't list Compound Reader Directory [{}]", finalDirectory), e);
-                return ImmutableOpenMap.of();
-            }
-        } else {
-            try {
-                files = segmentReader.getSegmentInfo().files().toArray(new String[]{});
-            } catch (IOException e) {
-                logger.warn(() ->
-                    new ParameterizedMessage("Couldn't list Directory from SegmentReader [{}] and SegmentInfo [{}]",
-                        segmentReader, segmentReader.getSegmentInfo()), e);
-                return ImmutableOpenMap.of();
-            }
-        }
-
-        ImmutableOpenMap.Builder<String, Long> map = ImmutableOpenMap.builder();
-        for (String file : files) {
-            String extension = IndexFileNames.getExtension(file);
-            long length = 0L;
-            try {
-                length = directory.fileLength(file);
-            } catch (NoSuchFileException | FileNotFoundException e) {
-                final Directory finalDirectory = directory;
-                logger.warn(() -> new ParameterizedMessage("Tried to query fileLength but file is gone [{}] [{}]",
-                    finalDirectory, file), e);
-            } catch (IOException e) {
-                final Directory finalDirectory = directory;
-                logger.warn(() -> new ParameterizedMessage("Error when trying to query fileLength [{}] [{}]",
-                    finalDirectory, file), e);
-            }
-            if (length == 0L) {
-                continue;
-            }
-            map.put(extension, length);
-        }
-
-        if (useCompoundFile) {
-            try {
-                directory.close();
-            } catch (IOException e) {
-                final Directory finalDirectory = directory;
-                logger.warn(() -> new ParameterizedMessage("Error when closing compound reader on Directory [{}]",
-                    finalDirectory), e);
-            }
-        }
-
-        return map.build();
     }
 
     protected void writerSegmentStats(SegmentsStats stats) {
@@ -876,21 +1002,21 @@ public abstract class Engine implements Closeable {
     /** How much heap is used that would be freed by a refresh.  Note that this may throw {@link AlreadyClosedException}. */
     public abstract long getIndexBufferRAMBytesUsed();
 
-    final Segment[] getSegmentInfo(SegmentInfos lastCommittedSegmentInfos, boolean verbose) {
+    final Segment[] getSegmentInfo(SegmentInfos lastCommittedSegmentInfos) {
         ensureOpen();
         Map<String, Segment> segments = new HashMap<>();
         // first, go over and compute the search ones...
-        try (Searcher searcher = acquireSearcher("segments", SearcherScope.EXTERNAL)){
+        try (Searcher searcher = acquireSearcher("segments", SearcherScope.EXTERNAL)) {
             for (LeafReaderContext ctx : searcher.getIndexReader().getContext().leaves()) {
-                fillSegmentInfo(Lucene.segmentReader(ctx.reader()), verbose, true, segments);
+                fillSegmentInfo(Lucene.segmentReader(ctx.reader()), true, segments);
             }
         }
 
-        try (Searcher searcher = acquireSearcher("segments", SearcherScope.INTERNAL)){
+        try (Searcher searcher = acquireSearcher("segments", SearcherScope.INTERNAL)) {
             for (LeafReaderContext ctx : searcher.getIndexReader().getContext().leaves()) {
                 SegmentReader segmentReader = Lucene.segmentReader(ctx.reader());
                 if (segments.containsKey(segmentReader.getSegmentName()) == false) {
-                    fillSegmentInfo(segmentReader, verbose, false, segments);
+                    fillSegmentInfo(segmentReader, false, segments);
                 }
             }
         }
@@ -910,7 +1036,7 @@ public abstract class Engine implements Closeable {
                     try {
                         segment.sizeInBytes = info.sizeInBytes();
                     } catch (IOException e) {
-                        logger.trace(() -> new ParameterizedMessage("failed to get size for [{}]", info.info.name), e);
+                        logger.trace(() -> "failed to get size for [" + info.info.name + "]", e);
                     }
                     segment.segmentSort = info.info.getIndexSort();
                     segment.attributes = info.info.getAttributes();
@@ -926,7 +1052,7 @@ public abstract class Engine implements Closeable {
         return segmentsArr;
     }
 
-    private void fillSegmentInfo(SegmentReader segmentReader, boolean verbose, boolean search, Map<String, Segment> segments) {
+    private void fillSegmentInfo(SegmentReader segmentReader, boolean search, Map<String, Segment> segments) {
         SegmentCommitInfo info = segmentReader.getSegmentInfo();
         assert segments.containsKey(info.info.name) == false;
         Segment segment = new Segment(info.info.name);
@@ -938,13 +1064,9 @@ public abstract class Engine implements Closeable {
         try {
             segment.sizeInBytes = info.sizeInBytes();
         } catch (IOException e) {
-            logger.trace(() -> new ParameterizedMessage("failed to get size for [{}]", info.info.name), e);
+            logger.trace(() -> "failed to get size for [" + info.info.name + "]", e);
         }
-        segment.memoryInBytes = segmentReader.ramBytesUsed();
         segment.segmentSort = info.info.getIndexSort();
-        if (verbose) {
-            segment.ramTree = Accountables.namedAccountable("root", segmentReader);
-        }
         segment.attributes = info.info.getAttributes();
         // TODO: add more fine grained mem stats values to per segment info here
         segments.put(info.info.name, segment);
@@ -953,7 +1075,7 @@ public abstract class Engine implements Closeable {
     /**
      * The list of segments in the engine.
      */
-    public abstract List<Segment> segments(boolean verbose);
+    public abstract List<Segment> segments();
 
     public boolean refreshNeeded() {
         if (store.tryIncRef()) {
@@ -982,16 +1104,24 @@ public abstract class Engine implements Closeable {
      * changes.
      */
     @Nullable
-    public abstract void refresh(String source) throws EngineException;
+    public abstract RefreshResult refresh(String source) throws EngineException;
 
     /**
-     * Synchronously refreshes the engine for new search operations to reflect the latest
+     * An async variant of {@link Engine#refresh(String)} that may apply some rate-limiting.
+     */
+    public void externalRefresh(String source, ActionListener<Engine.RefreshResult> listener) {
+        ActionListener.completeWith(listener, () -> {
+            logger.trace("external refresh with source [{}]", source);
+            return refresh(source);
+        });
+    }
+
+    /**
+     * Asynchronously refreshes the engine for new search operations to reflect the latest
      * changes unless another thread is already refreshing the engine concurrently.
-     *
-     * @return <code>true</code> if the a refresh happened. Otherwise <code>false</code>
      */
     @Nullable
-    public abstract boolean maybeRefresh(String source) throws EngineException;
+    public abstract void maybeRefresh(String source, ActionListener<RefreshResult> listener) throws EngineException;
 
     /**
      * Called when our engine is using too much heap and should move buffered indexed/deleted documents to disk.
@@ -1006,13 +1136,29 @@ public abstract class Engine implements Closeable {
     public abstract boolean shouldPeriodicallyFlush();
 
     /**
-     * Flushes the state of the engine including the transaction log, clearing memory.
+     * A Blocking helper method for calling the async flush method.
+     */
+    // TODO: Remove or rename for increased clarity
+    public void flush(boolean force, boolean waitIfOngoing) throws EngineException {
+        PlainActionFuture<FlushResult> future = PlainActionFuture.newFuture();
+        flush(force, waitIfOngoing, future);
+        future.actionGet();
+    }
+
+    /**
+     * Flushes the state of the engine including the transaction log, clearing memory, and writing the
+     * documents in the Lucene index to disk. This method will synchronously flush on the calling thread.
+     * However, depending on engine implementation, full durability will not be guaranteed until the listener
+     * is triggered.
      *
      * @param force         if <code>true</code> a lucene commit is executed even if no changes need to be committed.
      * @param waitIfOngoing if <code>true</code> this call will block until all currently running flushes have finished.
      *                      Otherwise this call will return without blocking.
+     * @param listener      to notify after fully durability has been achieved. if <code>waitIfOngoing==false</code> and ongoing
+     *                      request is detected, no flush will have occurred and the listener will be completed with a marker
+     *                      indicating no flush and unknown generation.
      */
-    public abstract void flush(boolean force, boolean waitIfOngoing) throws EngineException;
+    public abstract void flush(boolean force, boolean waitIfOngoing, ActionListener<FlushResult> listener) throws EngineException;
 
     /**
      * Flushes the state of the engine including the transaction log, clearing memory and persisting
@@ -1021,9 +1167,10 @@ public abstract class Engine implements Closeable {
      * a lucene commit if nothing needs to be committed.
      */
     public final void flush() throws EngineException {
-        flush(false, false);
+        PlainActionFuture<FlushResult> future = PlainActionFuture.newFuture();
+        flush(false, false, future);
+        future.actionGet();
     }
-
 
     /**
      * checks and removes translog files that no longer need to be retained. See
@@ -1047,8 +1194,8 @@ public abstract class Engine implements Closeable {
     /**
      * Triggers a forced merge on this engine
      */
-    public abstract void forceMerge(boolean flush, int maxNumSegments, boolean onlyExpungeDeletes,
-                                    String forceMergeUUID) throws EngineException, IOException;
+    public abstract void forceMerge(boolean flush, int maxNumSegments, boolean onlyExpungeDeletes, String forceMergeUUID)
+        throws EngineException, IOException;
 
     /**
      * Snapshots the most recent index and returns a handle to it. If needed will try and "commit" the
@@ -1101,15 +1248,14 @@ public abstract class Engine implements Closeable {
      * The underlying store is marked corrupted iff failure is caused by index corruption
      */
     public void failEngine(String reason, @Nullable Exception failure) {
+        assert Transports.assertNotTransportThread("failEngine can block on IO");
         if (failure != null) {
             maybeDie(reason, failure);
         }
         if (failEngineLock.tryLock()) {
             try {
                 if (failedEngine.get() != null) {
-                    logger.warn(() ->
-                        new ParameterizedMessage("tried to fail engine but engine is already failed. ignoring. [{}]",
-                            reason), failure);
+                    logger.warn(() -> "tried to fail engine but engine is already failed. ignoring. [" + reason + "]", failure);
                     return;
                 }
                 // this must happen before we close IW or Translog such that we can check this state to opt out of failing the engine
@@ -1119,7 +1265,7 @@ public abstract class Engine implements Closeable {
                     // we just go and close this engine - no way to recover
                     closeNoLock("engine failed on: [" + reason + "]", closedLatch);
                 } finally {
-                    logger.warn(() -> new ParameterizedMessage("failed engine [{}]", reason), failure);
+                    logger.warn(() -> "failed engine [" + reason + "]", failure);
                     // we must set a failure exception, generate one if not supplied
                     // we first mark the store as corrupted before we notify any listeners
                     // this must happen first otherwise we might try to reallocate so quickly
@@ -1128,17 +1274,19 @@ public abstract class Engine implements Closeable {
                     if (Lucene.isCorruptionException(failure)) {
                         if (store.tryIncRef()) {
                             try {
-                                store.markStoreCorrupted(new IOException("failed engine (reason: [" + reason + "])",
-                                    ExceptionsHelper.unwrapCorruption(failure)));
+                                store.markStoreCorrupted(
+                                    new IOException("failed engine (reason: [" + reason + "])", ExceptionsHelper.unwrapCorruption(failure))
+                                );
                             } catch (IOException e) {
                                 logger.warn("Couldn't mark store corrupted", e);
                             } finally {
                                 store.decRef();
                             }
                         } else {
-                            logger.warn(() ->
-                                    new ParameterizedMessage("tried to mark store as corrupted but store is already closed. [{}]", reason),
-                                failure);
+                            logger.warn(
+                                () -> format("tried to mark store as corrupted but store is already closed. [%s]", reason),
+                                failure
+                            );
                         }
                     }
                     eventListener.onFailedEngine(reason, failure);
@@ -1149,8 +1297,10 @@ public abstract class Engine implements Closeable {
                 logger.warn("failEngine threw exception", inner);
             }
         } else {
-            logger.debug(() -> new ParameterizedMessage("tried to fail engine but could not acquire lock - engine should " +
-                "be failed by now [{}]", reason), failure);
+            logger.debug(
+                () -> format("tried to fail engine but could not acquire lock - engine should be failed by now [%s]", reason),
+                failure
+            );
         }
     }
 
@@ -1163,13 +1313,11 @@ public abstract class Engine implements Closeable {
         return false;
     }
 
-
     public interface EventListener {
         /**
          * Called when a fatal exception occurred
          */
-        default void onFailedEngine(String reason, @Nullable Exception e) {
-        }
+        default void onFailedEngine(String reason, @Nullable Exception e) {}
     }
 
     public abstract static class SearcherSupplier implements Releasable {
@@ -1185,7 +1333,7 @@ public abstract class Engine implements Closeable {
                 throw new AlreadyClosedException("SearcherSupplier was closed");
             }
             final Searcher searcher = acquireSearcherInternal(source);
-            return CAN_MATCH_SEARCH_SOURCE.equals(source) ? searcher : wrapper.apply(searcher);
+            return wrapper.apply(searcher);
         }
 
         @Override
@@ -1215,9 +1363,14 @@ public abstract class Engine implements Closeable {
         private final String source;
         private final Closeable onClose;
 
-        public Searcher(String source, IndexReader reader,
-                        Similarity similarity, QueryCache queryCache, QueryCachingPolicy queryCachingPolicy,
-                        Closeable onClose) {
+        public Searcher(
+            String source,
+            IndexReader reader,
+            Similarity similarity,
+            QueryCache queryCache,
+            QueryCachingPolicy queryCachingPolicy,
+            Closeable onClose
+        ) {
             super(reader);
             setSimilarity(similarity);
             setQueryCache(queryCache);
@@ -1257,7 +1410,9 @@ public abstract class Engine implements Closeable {
 
         /** type of operation (index, delete), subclasses use static types */
         public enum TYPE {
-            INDEX, DELETE, NO_OP;
+            INDEX,
+            DELETE,
+            NO_OP;
 
             private final String lowercase;
 
@@ -1350,15 +1505,26 @@ public abstract class Engine implements Closeable {
         private final long ifSeqNo;
         private final long ifPrimaryTerm;
 
-        public Index(Term uid, ParsedDocument doc, long seqNo, long primaryTerm, long version, VersionType versionType, Origin origin,
-                     long startTime, long autoGeneratedIdTimestamp, boolean isRetry, long ifSeqNo, long ifPrimaryTerm) {
+        public Index(
+            Term uid,
+            ParsedDocument doc,
+            long seqNo,
+            long primaryTerm,
+            long version,
+            VersionType versionType,
+            Origin origin,
+            long startTime,
+            long autoGeneratedIdTimestamp,
+            boolean isRetry,
+            long ifSeqNo,
+            long ifPrimaryTerm
+        ) {
             super(uid, seqNo, primaryTerm, version, versionType, origin, startTime);
             assert (origin == Origin.PRIMARY) == (versionType != null) : "invalid version_type=" + versionType + " for origin=" + origin;
             assert ifPrimaryTerm >= 0 : "ifPrimaryTerm [" + ifPrimaryTerm + "] must be non negative";
-            assert ifSeqNo == UNASSIGNED_SEQ_NO || ifSeqNo >=0 :
-                "ifSeqNo [" + ifSeqNo + "] must be non negative or unset";
-            assert (origin == Origin.PRIMARY) || (ifSeqNo == UNASSIGNED_SEQ_NO && ifPrimaryTerm == UNASSIGNED_PRIMARY_TERM) :
-                "cas operations are only allowed if origin is primary. get [" + origin + "]";
+            assert ifSeqNo == UNASSIGNED_SEQ_NO || ifSeqNo >= 0 : "ifSeqNo [" + ifSeqNo + "] must be non negative or unset";
+            assert (origin == Origin.PRIMARY) || (ifSeqNo == UNASSIGNED_SEQ_NO && ifPrimaryTerm == UNASSIGNED_PRIMARY_TERM)
+                : "cas operations are only allowed if origin is primary. get [" + origin + "]";
             this.doc = doc;
             this.isRetry = isRetry;
             this.autoGeneratedIdTimestamp = autoGeneratedIdTimestamp;
@@ -1371,8 +1537,20 @@ public abstract class Engine implements Closeable {
         } // TEST ONLY
 
         Index(Term uid, long primaryTerm, ParsedDocument doc, long version) {
-            this(uid, doc, UNASSIGNED_SEQ_NO, primaryTerm, version, VersionType.INTERNAL,
-                Origin.PRIMARY, System.nanoTime(), -1, false, UNASSIGNED_SEQ_NO, 0);
+            this(
+                uid,
+                doc,
+                UNASSIGNED_SEQ_NO,
+                primaryTerm,
+                version,
+                VersionType.INTERNAL,
+                Origin.PRIMARY,
+                System.nanoTime(),
+                -1,
+                false,
+                UNASSIGNED_SEQ_NO,
+                0
+            );
         } // TEST ONLY
 
         public ParsedDocument parsedDoc() {
@@ -1393,7 +1571,7 @@ public abstract class Engine implements Closeable {
             return this.doc.routing();
         }
 
-        public List<Document> docs() {
+        public List<LuceneDocument> docs() {
             return this.doc.docs();
         }
 
@@ -1438,28 +1616,57 @@ public abstract class Engine implements Closeable {
         private final long ifSeqNo;
         private final long ifPrimaryTerm;
 
-        public Delete(String id, Term uid, long seqNo, long primaryTerm, long version, VersionType versionType,
-                      Origin origin, long startTime, long ifSeqNo, long ifPrimaryTerm) {
+        public Delete(
+            String id,
+            Term uid,
+            long seqNo,
+            long primaryTerm,
+            long version,
+            VersionType versionType,
+            Origin origin,
+            long startTime,
+            long ifSeqNo,
+            long ifPrimaryTerm
+        ) {
             super(uid, seqNo, primaryTerm, version, versionType, origin, startTime);
             assert (origin == Origin.PRIMARY) == (versionType != null) : "invalid version_type=" + versionType + " for origin=" + origin;
             assert ifPrimaryTerm >= 0 : "ifPrimaryTerm [" + ifPrimaryTerm + "] must be non negative";
-            assert ifSeqNo == UNASSIGNED_SEQ_NO || ifSeqNo >=0 :
-                "ifSeqNo [" + ifSeqNo + "] must be non negative or unset";
-            assert (origin == Origin.PRIMARY) || (ifSeqNo == UNASSIGNED_SEQ_NO && ifPrimaryTerm == UNASSIGNED_PRIMARY_TERM) :
-                "cas operations are only allowed if origin is primary. get [" + origin + "]";
+            assert ifSeqNo == UNASSIGNED_SEQ_NO || ifSeqNo >= 0 : "ifSeqNo [" + ifSeqNo + "] must be non negative or unset";
+            assert (origin == Origin.PRIMARY) || (ifSeqNo == UNASSIGNED_SEQ_NO && ifPrimaryTerm == UNASSIGNED_PRIMARY_TERM)
+                : "cas operations are only allowed if origin is primary. get [" + origin + "]";
             this.id = Objects.requireNonNull(id);
             this.ifSeqNo = ifSeqNo;
             this.ifPrimaryTerm = ifPrimaryTerm;
         }
 
         public Delete(String id, Term uid, long primaryTerm) {
-            this(id, uid, UNASSIGNED_SEQ_NO, primaryTerm, Versions.MATCH_ANY, VersionType.INTERNAL,
-                Origin.PRIMARY, System.nanoTime(), UNASSIGNED_SEQ_NO, 0);
+            this(
+                id,
+                uid,
+                UNASSIGNED_SEQ_NO,
+                primaryTerm,
+                Versions.MATCH_ANY,
+                VersionType.INTERNAL,
+                Origin.PRIMARY,
+                System.nanoTime(),
+                UNASSIGNED_SEQ_NO,
+                0
+            );
         }
 
         public Delete(Delete template, VersionType versionType) {
-            this(template.id(), template.uid(), template.seqNo(), template.primaryTerm(), template.version(),
-                    versionType, template.origin(), template.startTime(), UNASSIGNED_SEQ_NO, 0);
+            this(
+                template.id(),
+                template.uid(),
+                template.seqNo(),
+                template.primaryTerm(),
+                template.version(),
+                versionType,
+                template.origin(),
+                template.startTime(),
+                UNASSIGNED_SEQ_NO,
+                0
+            );
         }
 
         @Override
@@ -1582,7 +1789,6 @@ public abstract class Engine implements Closeable {
             return readFromTranslog;
         }
 
-
         public Get setIfSeqNo(long seqNo) {
             this.ifSeqNo = seqNo;
             return this;
@@ -1608,21 +1814,18 @@ public abstract class Engine implements Closeable {
         private final long version;
         private final DocIdAndVersion docIdAndVersion;
         private final Engine.Searcher searcher;
-        private final boolean fromTranslog;
 
-        public static final GetResult NOT_EXISTS = new GetResult(false, Versions.NOT_FOUND, null, null, false);
+        public static final GetResult NOT_EXISTS = new GetResult(false, Versions.NOT_FOUND, null, null);
 
-        private GetResult(boolean exists, long version, DocIdAndVersion docIdAndVersion, Engine.Searcher searcher, boolean fromTranslog) {
+        private GetResult(boolean exists, long version, DocIdAndVersion docIdAndVersion, Engine.Searcher searcher) {
             this.exists = exists;
             this.version = version;
             this.docIdAndVersion = docIdAndVersion;
             this.searcher = searcher;
-            this.fromTranslog = fromTranslog;
-            assert fromTranslog == false || searcher.getIndexReader() instanceof TranslogLeafReader;
         }
 
-        public GetResult(Engine.Searcher searcher, DocIdAndVersion docIdAndVersion, boolean fromTranslog) {
-            this(true, docIdAndVersion.version, docIdAndVersion, searcher, fromTranslog);
+        public GetResult(Engine.Searcher searcher, DocIdAndVersion docIdAndVersion) {
+            this(true, docIdAndVersion.version, docIdAndVersion, searcher);
         }
 
         public boolean exists() {
@@ -1631,14 +1834,6 @@ public abstract class Engine implements Closeable {
 
         public long version() {
             return this.version;
-        }
-
-        /**
-         * Returns {@code true} iff the get was performed from a translog operation. Notes that this returns {@code false}
-         * if the get was performed on an in-memory Lucene segment created from the corresponding translog operation.
-         */
-        public boolean isFromTranslog() {
-            return fromTranslog;
         }
 
         public Engine.Searcher searcher() {
@@ -1676,7 +1871,8 @@ public abstract class Engine implements Closeable {
                     try {
                         // TODO we might force a flush in the future since we have the write lock already even though recoveries
                         // are running.
-                        flush();
+                        // TODO: We are not waiting for full durability here atm because we are on the cluster state update thread
+                        flush(false, false, ActionListener.noop());
                     } catch (AlreadyClosedException ex) {
                         logger.debug("engine already closed - skipping flushAndClose");
                     }
@@ -1787,12 +1983,52 @@ public abstract class Engine implements Closeable {
 
     /**
      * Performs recovery from the transaction log up to {@code recoverUpToSeqNo} (inclusive).
-     * This operation will close the engine if the recovery fails.
+     * This operation will close the engine if the recovery fails. Use EngineTestCase#recoverFromTranslog for test usages
      *
      * @param translogRecoveryRunner the translog recovery runner
      * @param recoverUpToSeqNo       the upper bound, inclusive, of sequence number to be recovered
      */
-    public abstract Engine recoverFromTranslog(TranslogRecoveryRunner translogRecoveryRunner, long recoverUpToSeqNo) throws IOException;
+    // TODO make all the production usages fully async
+    public final void recoverFromTranslog(TranslogRecoveryRunner translogRecoveryRunner, long recoverUpToSeqNo) throws IOException {
+        final var future = new PlainActionFuture<Void>();
+        recoverFromTranslog(translogRecoveryRunner, recoverUpToSeqNo, future);
+        try {
+            future.get();
+        } catch (ExecutionException e) {
+            // This is a (temporary) adapter between the older synchronous (blocking) code and the newer (async) API. Callers expect
+            // exceptions to be thrown directly, but Future#get adds an ExecutionException wrapper which we must remove to preserve the
+            // expected exception semantics.
+            if (e.getCause() instanceof IOException ioException) {
+                throw ioException;
+            } else if (e.getCause() instanceof RuntimeException runtimeException) {
+                throw runtimeException;
+            } else {
+                // the old code was "throws IOException" so we shouldn't see any other exception types here
+                logger.error("checked non-IOException unexpectedly thrown", e);
+                assert false : e;
+                throw new UncategorizedExecutionException("recoverFromTranslog", e);
+            }
+        } catch (InterruptedException e) {
+            // We don't really use interrupts in this area so this is somewhat unexpected (unless perhaps we're shutting down), just treat
+            // it like any other exception.
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * Performs recovery from the transaction log up to {@code recoverUpToSeqNo} (inclusive).
+     * This operation will close the engine if the recovery fails.
+     *
+     * @param translogRecoveryRunner the translog recovery runner
+     * @param recoverUpToSeqNo       the upper bound, inclusive, of sequence number to be recovered
+     * @param listener               listener notified on completion of the recovery, whether successful or otherwise
+     */
+    public abstract void recoverFromTranslog(
+        TranslogRecoveryRunner translogRecoveryRunner,
+        long recoverUpToSeqNo,
+        ActionListener<Void> listener
+    );
 
     /**
      * Do not replay translog operations, but make the engine be ready.
@@ -1873,4 +2109,40 @@ public abstract class Engine implements Closeable {
      */
     public abstract ShardLongFieldRange getRawFieldRange(String field) throws IOException;
 
+    public final EngineConfig getEngineConfig() {
+        return engineConfig;
+    }
+
+    /**
+     * Allows registering a listener for when the index shard is on a segment generation >= minGeneration.
+     */
+    public void addSegmentGenerationListener(long minGeneration, ActionListener<Long> listener) {
+        throw new UnsupportedOperationException();
+    }
+
+    public void addFlushListener(Translog.Location location, ActionListener<Long> listener) {
+        listener.onFailure(new UnsupportedOperationException("Engine type " + this.getClass() + " does not support flush listeners."));
+    }
+
+    /**
+     * Captures the result of a refresh operation on the index shard.
+     * <p>
+     * <code>refreshed</code> is true if a refresh happened. If refreshed, <code>generation</code>
+     * contains the generation of the index commit that the reader has opened upon refresh.
+     */
+    public record RefreshResult(boolean refreshed, long generation) {
+
+        public static final long UNKNOWN_GENERATION = -1L;
+        public static final RefreshResult NO_REFRESH = new RefreshResult(false);
+
+        public RefreshResult(boolean refreshed) {
+            this(refreshed, UNKNOWN_GENERATION);
+        }
+    }
+
+    public record FlushResult(boolean flushPerformed, long generation) {
+
+        public static final long UNKNOWN_GENERATION = -1L;
+        public static final FlushResult NO_FLUSH = new FlushResult(false, UNKNOWN_GENERATION);
+    }
 }

@@ -8,8 +8,8 @@
 
 package org.elasticsearch.recovery;
 
-import org.apache.lucene.util.English;
-import org.apache.lucene.util.LuceneTestCase.SuppressCodecs;
+import org.apache.lucene.tests.util.English;
+import org.apache.lucene.tests.util.LuceneTestCase.SuppressCodecs;
 import org.elasticsearch.action.admin.cluster.node.stats.NodeStats;
 import org.elasticsearch.action.admin.cluster.node.stats.NodesStatsResponse;
 import org.elasticsearch.action.index.IndexRequestBuilder;
@@ -55,14 +55,14 @@ public class TruncatedRecoveryIT extends ESIntegTestCase {
      * Later we allow full recovery to ensure we can still recover and don't run into corruptions.
      */
     public void testCancelRecoveryAndResume() throws Exception {
-        assertTrue(client().admin().cluster().prepareUpdateSettings().setTransientSettings(Settings.builder()
-            .put(CHUNK_SIZE_SETTING.getKey(), new ByteSizeValue(randomIntBetween(50, 300), ByteSizeUnit.BYTES)))
-            .get().isAcknowledged());
+        updateClusterSettings(
+            Settings.builder().put(CHUNK_SIZE_SETTING.getKey(), new ByteSizeValue(randomIntBetween(50, 300), ByteSizeUnit.BYTES))
+        );
 
-        NodesStatsResponse nodeStats = client().admin().cluster().prepareNodesStats().get();
+        NodesStatsResponse nodeStats = clusterAdmin().prepareNodesStats().get();
         List<NodeStats> dataNodeStats = new ArrayList<>();
         for (NodeStats stat : nodeStats.getNodes()) {
-            if (stat.getNode().isDataNode()) {
+            if (stat.getNode().canContainData()) {
                 dataNodeStats.add(stat);
             }
         }
@@ -76,11 +76,12 @@ public class TruncatedRecoveryIT extends ESIntegTestCase {
 
         // create the index and prevent allocation on any other nodes than the lucky one
         // we have no replicas so far and make sure that we allocate the primary on the lucky node
-        assertAcked(prepareCreate("test")
-            .setMapping("field1", "type=text", "the_id", "type=text")
-            .setSettings(Settings.builder().put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 0)
-                .put(IndexMetadata.SETTING_NUMBER_OF_SHARDS, numberOfShards())
-                .put("index.routing.allocation.include._name", primariesNode.getNode().getName()))); // only allocate on the lucky node
+        assertAcked(
+            prepareCreate("test").setMapping("field1", "type=text", "the_id", "type=text")
+                .setSettings(
+                    indexSettings(numberOfShards(), 0).put("index.routing.allocation.include._name", primariesNode.getNode().getName())
+                )
+        ); // only allocate on the lucky node
 
         // index some docs and check if they are coming back
         int numDocs = randomIntBetween(100, 200);
@@ -96,16 +97,19 @@ public class TruncatedRecoveryIT extends ESIntegTestCase {
         }
         ensureGreen();
         // ensure we have flushed segments and make them a big one via optimize
-        client().admin().indices().prepareFlush().setForce(true).get();
-        client().admin().indices().prepareFlush().setForce(true).get(); // double flush to create safe commit in case of async durability
-        client().admin().indices().prepareForceMerge().setMaxNumSegments(1).setFlush(true).get();
+        indicesAdmin().prepareFlush().setForce(true).get();
+        indicesAdmin().prepareFlush().setForce(true).get(); // double flush to create safe commit in case of async durability
+        indicesAdmin().prepareForceMerge().setMaxNumSegments(1).setFlush(true).get();
 
         final CountDownLatch latch = new CountDownLatch(1);
         final AtomicBoolean truncate = new AtomicBoolean(true);
         for (NodeStats dataNode : dataNodeStats) {
-            MockTransportService mockTransportService = ((MockTransportService) internalCluster()
-                    .getInstance(TransportService.class, dataNode.getNode().getName()));
-            mockTransportService.addSendBehavior(internalCluster().getInstance(TransportService.class, unluckyNode.getNode().getName()),
+            MockTransportService mockTransportService = ((MockTransportService) internalCluster().getInstance(
+                TransportService.class,
+                dataNode.getNode().getName()
+            ));
+            mockTransportService.addSendBehavior(
+                internalCluster().getInstance(TransportService.class, unluckyNode.getNode().getName()),
                 (connection, requestId, action, request, options) -> {
                     if (action.equals(PeerRecoveryTargetService.Actions.FILE_CHUNK)) {
                         RecoveryFileChunkRequest req = (RecoveryFileChunkRequest) request;
@@ -116,14 +120,20 @@ public class TruncatedRecoveryIT extends ESIntegTestCase {
                         }
                     }
                     connection.sendRequest(requestId, action, request, options);
-                });
+                }
+            );
         }
 
         logger.info("--> bumping replicas to 1"); //
-        client().admin().indices().prepareUpdateSettings("test").setSettings(Settings.builder()
-            .put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 1)
-            .put("index.routing.allocation.include._name",  // now allow allocation on all nodes
-                primariesNode.getNode().getName() + "," + unluckyNode.getNode().getName())).get();
+        updateIndexSettings(
+            Settings.builder()
+                .put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 1)
+                .put(
+                    "index.routing.allocation.include._name",  // now allow allocation on all nodes
+                    primariesNode.getNode().getName() + "," + unluckyNode.getNode().getName()
+                ),
+            "test"
+        );
 
         latch.await();
 

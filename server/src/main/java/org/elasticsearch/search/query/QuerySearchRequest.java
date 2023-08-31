@@ -8,15 +8,15 @@
 
 package org.elasticsearch.search.query;
 
-import org.elasticsearch.Version;
+import org.elasticsearch.TransportVersion;
 import org.elasticsearch.action.IndicesRequest;
 import org.elasticsearch.action.OriginalIndices;
 import org.elasticsearch.action.search.SearchShardTask;
 import org.elasticsearch.action.support.IndicesOptions;
-import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
+import org.elasticsearch.core.Nullable;
 import org.elasticsearch.search.dfs.AggregatedDfs;
 import org.elasticsearch.search.internal.ShardSearchContextId;
 import org.elasticsearch.search.internal.ShardSearchRequest;
@@ -34,8 +34,12 @@ public class QuerySearchRequest extends TransportRequest implements IndicesReque
     private final OriginalIndices originalIndices;
     private final ShardSearchRequest shardSearchRequest;
 
-    public QuerySearchRequest(OriginalIndices originalIndices, ShardSearchContextId contextId,
-                              ShardSearchRequest shardSearchRequest, AggregatedDfs dfs) {
+    public QuerySearchRequest(
+        OriginalIndices originalIndices,
+        ShardSearchContextId contextId,
+        ShardSearchRequest shardSearchRequest,
+        AggregatedDfs dfs
+    ) {
         this.contextId = contextId;
         this.dfs = dfs;
         this.shardSearchRequest = shardSearchRequest;
@@ -47,7 +51,7 @@ public class QuerySearchRequest extends TransportRequest implements IndicesReque
         contextId = new ShardSearchContextId(in);
         dfs = new AggregatedDfs(in);
         originalIndices = OriginalIndices.readOriginalIndices(in);
-        if (in.getVersion().onOrAfter(Version.V_7_10_0)) {
+        if (in.getTransportVersion().onOrAfter(TransportVersion.V_7_10_0)) {
             this.shardSearchRequest = in.readOptionalWriteable(ShardSearchRequest::new);
         } else {
             this.shardSearchRequest = null;
@@ -60,7 +64,7 @@ public class QuerySearchRequest extends TransportRequest implements IndicesReque
         contextId.writeTo(out);
         dfs.writeTo(out);
         OriginalIndices.writeOriginalIndices(originalIndices, out);
-        if (out.getVersion().onOrAfter(Version.V_7_10_0)) {
+        if (out.getTransportVersion().onOrAfter(TransportVersion.V_7_10_0)) {
             out.writeOptionalWriteable(shardSearchRequest);
         }
     }

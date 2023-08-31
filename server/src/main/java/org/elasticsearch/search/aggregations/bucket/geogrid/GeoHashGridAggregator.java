@@ -17,21 +17,35 @@ import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
+import java.util.function.LongConsumer;
 
 /**
  * Aggregates data expressed as GeoHash longs (for efficiency's sake) but formats results as Geohash strings.
  */
 public class GeoHashGridAggregator extends GeoGridAggregator<InternalGeoHashGrid> {
 
-    public GeoHashGridAggregator(String name, AggregatorFactories factories, ValuesSource.Numeric valuesSource,
-                                 int requiredSize, int shardSize, AggregationContext context,
-                                 Aggregator parent, CardinalityUpperBound cardinality, Map<String, Object> metadata) throws IOException {
+    public GeoHashGridAggregator(
+        String name,
+        AggregatorFactories factories,
+        Function<LongConsumer, ValuesSource.Numeric> valuesSource,
+        int requiredSize,
+        int shardSize,
+        AggregationContext context,
+        Aggregator parent,
+        CardinalityUpperBound cardinality,
+        Map<String, Object> metadata
+    ) throws IOException {
         super(name, factories, valuesSource, requiredSize, shardSize, context, parent, cardinality, metadata);
     }
 
     @Override
-    InternalGeoHashGrid buildAggregation(String name, int requiredSize, List<InternalGeoGridBucket> buckets,
-                                         Map<String, Object> metadata) {
+    protected InternalGeoHashGrid buildAggregation(
+        String name,
+        int requiredSize,
+        List<InternalGeoGridBucket> buckets,
+        Map<String, Object> metadata
+    ) {
         return new InternalGeoHashGrid(name, requiredSize, buckets, metadata);
     }
 
@@ -40,7 +54,7 @@ public class GeoHashGridAggregator extends GeoGridAggregator<InternalGeoHashGrid
         return new InternalGeoHashGrid(name, requiredSize, Collections.emptyList(), metadata());
     }
 
-    InternalGeoGridBucket newEmptyBucket() {
+    protected InternalGeoGridBucket newEmptyBucket() {
         return new InternalGeoHashGridBucket(0, 0, null);
     }
 }

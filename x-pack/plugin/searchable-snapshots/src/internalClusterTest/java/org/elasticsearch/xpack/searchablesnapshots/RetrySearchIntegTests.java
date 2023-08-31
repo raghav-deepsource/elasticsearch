@@ -7,12 +7,16 @@
 package org.elasticsearch.xpack.searchablesnapshots;
 
 import org.elasticsearch.action.index.IndexRequestBuilder;
+import org.elasticsearch.action.search.ClosePointInTimeAction;
+import org.elasticsearch.action.search.ClosePointInTimeRequest;
+import org.elasticsearch.action.search.OpenPointInTimeAction;
+import org.elasticsearch.action.search.OpenPointInTimeRequest;
 import org.elasticsearch.action.search.SearchResponse;
 import org.elasticsearch.action.search.SearchType;
 import org.elasticsearch.action.support.IndicesOptions;
 import org.elasticsearch.cluster.metadata.IndexMetadata;
 import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.common.unit.TimeValue;
+import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.index.IndexService;
 import org.elasticsearch.index.engine.Engine;
 import org.elasticsearch.index.query.RangeQueryBuilder;
@@ -20,10 +24,6 @@ import org.elasticsearch.index.shard.IndexShard;
 import org.elasticsearch.indices.IndicesService;
 import org.elasticsearch.search.builder.PointInTimeBuilder;
 import org.elasticsearch.snapshots.SnapshotId;
-import org.elasticsearch.xpack.core.search.action.ClosePointInTimeAction;
-import org.elasticsearch.xpack.core.search.action.ClosePointInTimeRequest;
-import org.elasticsearch.xpack.core.search.action.OpenPointInTimeAction;
-import org.elasticsearch.xpack.core.search.action.OpenPointInTimeRequest;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -41,11 +41,10 @@ public class RetrySearchIntegTests extends BaseSearchableSnapshotsIntegTestCase 
         final String indexName = randomAlphaOfLength(10).toLowerCase(Locale.ROOT);
         final int numberOfShards = between(1, 5);
         assertAcked(
-            client().admin()
-                .indices()
-                .prepareCreate(indexName)
+            indicesAdmin().prepareCreate(indexName)
                 .setSettings(Settings.builder().put(IndexMetadata.SETTING_NUMBER_OF_SHARDS, numberOfShards).build())
-                .setMapping("{\"properties\":{\"created_date\":{\"type\": \"date\", \"format\": \"yyyy-MM-dd\"}}}")
+                .setMapping("""
+                    {"properties":{"created_date":{"type": "date", "format": "yyyy-MM-dd"}}}""")
         );
         final List<IndexRequestBuilder> indexRequestBuilders = new ArrayList<>();
         final int docCount = between(0, 100);
@@ -54,7 +53,7 @@ public class RetrySearchIntegTests extends BaseSearchableSnapshotsIntegTestCase 
         }
         indexRandom(true, false, indexRequestBuilders);
         assertThat(
-            client().admin().indices().prepareForceMerge(indexName).setOnlyExpungeDeletes(true).setFlush(true).get().getFailedShards(),
+            indicesAdmin().prepareForceMerge(indexName).setOnlyExpungeDeletes(true).setFlush(true).get().getFailedShards(),
             equalTo(0)
         );
         refresh(indexName);
@@ -64,7 +63,7 @@ public class RetrySearchIntegTests extends BaseSearchableSnapshotsIntegTestCase 
         createRepository(repositoryName, "fs");
 
         final SnapshotId snapshotOne = createSnapshot(repositoryName, "snapshot-1", List.of(indexName)).snapshotId();
-        assertAcked(client().admin().indices().prepareDelete(indexName));
+        assertAcked(indicesAdmin().prepareDelete(indexName));
 
         final int numberOfReplicas = between(0, 2);
         final Settings indexSettings = Settings.builder().put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, numberOfReplicas).build();
@@ -109,11 +108,10 @@ public class RetrySearchIntegTests extends BaseSearchableSnapshotsIntegTestCase 
     public void testRetryPointInTime() throws Exception {
         final String indexName = randomAlphaOfLength(10).toLowerCase(Locale.ROOT);
         assertAcked(
-            client().admin()
-                .indices()
-                .prepareCreate(indexName)
+            indicesAdmin().prepareCreate(indexName)
                 .setSettings(Settings.builder().put(IndexMetadata.SETTING_NUMBER_OF_SHARDS, between(1, 5)).build())
-                .setMapping("{\"properties\":{\"created_date\":{\"type\": \"date\", \"format\": \"yyyy-MM-dd\"}}}")
+                .setMapping("""
+                    {"properties":{"created_date":{"type": "date", "format": "yyyy-MM-dd"}}}""")
         );
         final List<IndexRequestBuilder> indexRequestBuilders = new ArrayList<>();
         final int docCount = between(0, 100);
@@ -122,7 +120,7 @@ public class RetrySearchIntegTests extends BaseSearchableSnapshotsIntegTestCase 
         }
         indexRandom(true, false, indexRequestBuilders);
         assertThat(
-            client().admin().indices().prepareForceMerge(indexName).setOnlyExpungeDeletes(true).setFlush(true).get().getFailedShards(),
+            indicesAdmin().prepareForceMerge(indexName).setOnlyExpungeDeletes(true).setFlush(true).get().getFailedShards(),
             equalTo(0)
         );
         refresh(indexName);
@@ -132,7 +130,7 @@ public class RetrySearchIntegTests extends BaseSearchableSnapshotsIntegTestCase 
         createRepository(repositoryName, "fs");
 
         final SnapshotId snapshotOne = createSnapshot(repositoryName, "snapshot-1", List.of(indexName)).snapshotId();
-        assertAcked(client().admin().indices().prepareDelete(indexName));
+        assertAcked(indicesAdmin().prepareDelete(indexName));
 
         final int numberOfReplicas = between(0, 2);
         final Settings indexSettings = Settings.builder().put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, numberOfReplicas).build();
@@ -141,16 +139,10 @@ public class RetrySearchIntegTests extends BaseSearchableSnapshotsIntegTestCase 
         mountSnapshot(repositoryName, snapshotOne.getName(), indexName, indexName, indexSettings);
         ensureGreen(indexName);
 
-        final String pitId = client().execute(
-            OpenPointInTimeAction.INSTANCE,
-            new OpenPointInTimeRequest(
-                new String[] { indexName },
-                IndicesOptions.STRICT_EXPAND_OPEN_FORBID_CLOSED,
-                TimeValue.timeValueMinutes(2),
-                null,
-                null
-            )
-        ).actionGet().getSearchContextId();
+        final OpenPointInTimeRequest openRequest = new OpenPointInTimeRequest(indexName).indicesOptions(
+            IndicesOptions.STRICT_EXPAND_OPEN_FORBID_CLOSED
+        ).keepAlive(TimeValue.timeValueMinutes(2));
+        final String pitId = client().execute(OpenPointInTimeAction.INSTANCE, openRequest).actionGet().getPointInTimeId();
         try {
             SearchResponse resp = client().prepareSearch()
                 .setIndices(indexName)

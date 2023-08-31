@@ -19,8 +19,10 @@ import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.discovery.MasterNotDiscoveredException;
 import org.elasticsearch.persistent.PersistentTasksCustomMetadata;
+import org.elasticsearch.tasks.CancellableTask;
 import org.elasticsearch.tasks.Task;
 import org.elasticsearch.threadpool.ThreadPool;
+import org.elasticsearch.transport.TransportResponseHandler;
 import org.elasticsearch.transport.TransportService;
 import org.elasticsearch.xpack.core.indexing.IndexerState;
 import org.elasticsearch.xpack.core.rollup.action.DeleteRollupJobAction;
@@ -29,13 +31,24 @@ import org.elasticsearch.xpack.rollup.job.RollupJobTask;
 
 import java.util.List;
 
-public class TransportDeleteRollupJobAction extends TransportTasksAction<RollupJobTask, DeleteRollupJobAction.Request,
-    DeleteRollupJobAction.Response, DeleteRollupJobAction.Response> {
+public class TransportDeleteRollupJobAction extends TransportTasksAction<
+    RollupJobTask,
+    DeleteRollupJobAction.Request,
+    DeleteRollupJobAction.Response,
+    DeleteRollupJobAction.Response> {
 
     @Inject
     public TransportDeleteRollupJobAction(TransportService transportService, ActionFilters actionFilters, ClusterService clusterService) {
-        super(DeleteRollupJobAction.NAME, clusterService, transportService, actionFilters, DeleteRollupJobAction.Request::new,
-            DeleteRollupJobAction.Response::new, DeleteRollupJobAction.Response::new, ThreadPool.Names.SAME);
+        super(
+            DeleteRollupJobAction.NAME,
+            clusterService,
+            transportService,
+            actionFilters,
+            DeleteRollupJobAction.Request::new,
+            DeleteRollupJobAction.Response::new,
+            DeleteRollupJobAction.Response::new,
+            ThreadPool.Names.SAME
+        );
     }
 
     @Override
@@ -60,31 +73,56 @@ public class TransportDeleteRollupJobAction extends TransportTasksAction<RollupJ
             if (nodes.getMasterNode() == null) {
                 listener.onFailure(new MasterNotDiscoveredException());
             } else {
-                transportService.sendRequest(nodes.getMasterNode(), actionName, request,
-                    new ActionListenerResponseHandler<>(listener, DeleteRollupJobAction.Response::new));
+                transportService.sendRequest(
+                    nodes.getMasterNode(),
+                    actionName,
+                    request,
+                    new ActionListenerResponseHandler<>(
+                        listener,
+                        DeleteRollupJobAction.Response::new,
+                        TransportResponseHandler.TRANSPORT_WORKER
+                    )
+                );
             }
         }
     }
 
     @Override
-    protected void taskOperation(DeleteRollupJobAction.Request request, RollupJobTask jobTask,
-                                 ActionListener<DeleteRollupJobAction.Response> listener) {
+    protected void taskOperation(
+        CancellableTask actionTask,
+        DeleteRollupJobAction.Request request,
+        RollupJobTask jobTask,
+        ActionListener<DeleteRollupJobAction.Response> listener
+    ) {
 
         assert jobTask.getConfig().getId().equals(request.getId());
         IndexerState state = ((RollupJobStatus) jobTask.getStatus()).getIndexerState();
-        if (state.equals(IndexerState.STOPPED) ) {
+        if (state.equals(IndexerState.STOPPED)) {
             jobTask.onCancelled();
             listener.onResponse(new DeleteRollupJobAction.Response(true));
         } else {
-            listener.onFailure(new IllegalStateException("Could not delete job [" + request.getId() + "] because " +
-                "indexer state is [" + state + "].  Job must be [" + IndexerState.STOPPED + "] before deletion."));
+            listener.onFailure(
+                new IllegalStateException(
+                    "Could not delete job ["
+                        + request.getId()
+                        + "] because "
+                        + "indexer state is ["
+                        + state
+                        + "].  Job must be ["
+                        + IndexerState.STOPPED
+                        + "] before deletion."
+                )
+            );
         }
     }
 
     @Override
-    protected DeleteRollupJobAction.Response newResponse(DeleteRollupJobAction.Request request, List<DeleteRollupJobAction.Response> tasks,
-                                                       List<TaskOperationFailure> taskOperationFailures,
-                                                       List<FailedNodeException> failedNodeExceptions) {
+    protected DeleteRollupJobAction.Response newResponse(
+        DeleteRollupJobAction.Request request,
+        List<DeleteRollupJobAction.Response> tasks,
+        List<TaskOperationFailure> taskOperationFailures,
+        List<FailedNodeException> failedNodeExceptions
+    ) {
         // There should theoretically only be one task running the rollup job
         // If there are more, in production it should be ok as long as they are acknowledge shutting down.
         // But in testing we'd like to know there were more than one hence the assert
